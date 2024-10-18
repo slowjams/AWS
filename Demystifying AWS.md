@@ -1,5 +1,135 @@
 ## Demystifying AWS
 
+# IAM
+
+It is not recommended to use access key for root users. You can create at most 2 access keys for an IAM user (rotating purpose).
+
+
+# VPC
+
+```bash
+# private address ranges
+10.0.0.0     -   10.255.255.255  (CIDR block: 10.0.0.0/8)
+172.16.0.0   -   172.31.255.255  (CIDR block: 172.16.0.0/12)
+192.168.0.0  -   192.168.255.255 (CIDR block: 192.168.0.0/16)
+```
+
+```bash
+# default VPC, always the same for all different region
+172.31.0.0/16
+
+# default us-east-2 subnets   last two octets         each network/subnet's host range        each subnet maps to an AZ
+172.31.0.0/20                0000|0000,00000000     start 172.31.0.0  end 172.31.15.255          us-east-2a
+172.31.16.0/20               0001|0000,00000000     start 172.31.16.0 end 172.31.31.255          us-east-2b
+172.31.32.0/20               0010|0000,00000000     start 172.31.32.0 end 172.31.47.255          us-east-2c
+
+
+# default us-west-2 subnets    each subnet maps to an AZ
+172.31.0.0/20                       us-west-2c  # not sure why 'c' map for lower addreeses
+172.31.16.0/20                      us-west-2a
+172.31.32.0/20                      us-west-2b
+172.31.48.0/20                      us-west-2d
+```
+
+## Default VPC Facts:
+
+* One per region - can be deleted & recreated. So a region in theory could have zero default VPC (if you delete it), but some AWS services assume default vpc will be present, so you should leave the default vpc active (do not delete or deactive it), but don't use default VPC for production.
+* CIDR is always `172.31.0.0/16`
+* /20 for every subnet
+* Subnets assign serivces public ip address
+
+
+# EC2
+
+```bash
+ssh -i "A4L.pem" ec2-user@ec2-18-234-163-215.compute-1.amazonaws.com
+```
+
+
+# S3
+
+* Bucket name are **globally unique**
+* An object can vary from 0 bytes to 5TB
+* You can have only 100 (soft limit) buckets per account, and with support request, up to 1000 (hard limit) buckets per account. This is designed to not let you design a system such as "one user per bucket" as you are supposed to use prefix.
+
+
+
+## CloudFormation
+
+```yml
+AWSTemplateFormatVersion: version date
+
+Description:
+  String
+
+Metadata:
+  template metadata
+
+Parameters:
+  set of parameters
+
+Rules:
+  set of rules
+
+Mappings:
+  set of mappings
+
+Conditions:
+  set of conditions
+
+Transform:
+  set of transforms
+
+Resources:
+  set of resources
+
+Outputs:
+  set of outputs
+```
+
+* if `AWSTemplateFormationVersion` is used then `Description` needs to be dicretly follow it
+
+
+## IAM
+
+* inline policy is for a single IAM user, so inline policy cannot be searched in the console UI (because it cannot be assigned to other IAM users)
+* An IAM user can be a member of maximum **10** grouprs and there is a **5,000** IAM user limit for an account
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+=========================================================================================================================================================================================
+
 AWS operates 24 **Regions** around the world, each region is composed of at least two, usually three **Availability Zones** (AZ). Each AZ is composed of one or more physically separated data centers. 
 
 A `VPC` is a logically isolated portion within a region. A VPC can contain multiple AZs and each AZ is physically isolated. 
@@ -377,7 +507,7 @@ A **Task definition** is like a "docker compose file" where you specify multiple
 or *External* (run containers on on-premises servers, you can only sepcify it in Service)
 Note that *Fargate* is serveless so you don't need to manager the underlying EC2 containers (you won't see new EC2 instance in your AWS), while *External* mode,  EC2 Instances you have manage the EC2 instances and install "agent" to register your EC2 instance with the underlying cluster, for *EC2 Instances* mode, AWS will install agents and regiser with cluster for you.
 
-A **Service** choose a Task definition and defines long running tasks-can control task count with Auto Scaling and attach an ELB. You multi-select  *Fargate*, *EC2 Instances* or *External*.
+A **Service** choose a Task definition and defines long running tasks-can control task count with Auto Scaling and attach an ELB. You can multi-select  *Fargate*, *EC2 Instances* or *External*.
 
 Note that *IAM instance role* (for underlying EC2 instasnces in non-fargate mode) is different to the* IAM Task Role*, and container instance have access to all of the permissions that are supplied to the container instance role through instance metadata. For Farget mode, there is only IAM Task Role, of course, because it doesn't have underlyhing EC2 instance.
 
@@ -415,6 +545,45 @@ For EC2 Lauch Type, an EC2 instance is assigned multiple random port numbers (ho
 
 For Fargate: each task gets a unique private ip adddress, there is no host port since we don't manage underlying EC2 instance. Each task is assigned with an ENI whose expose port is the same as the task's expose port, so you only need to allow port 80 (443 is not needed since the traffic is already in VPC) from ALB (security group allow port 80/443).
 
+
+**ECS Task Placement Strategies** in Service setup (only apply to EC2 Instance, not Fargate):
+
+* `Binpack`: minimizes the number of EC2 instance in use by placing tasks on least usage of CPU, memeory etc
+```json
+"placementStrategy" : [
+  {
+     "field": "memory",
+     "type": "binpack"
+  }
+]
+```
+* `Random`: pretty straightforward
+* `Spread`:
+```json
+"placementStrategy" : [
+  {
+     "field": "attributes:ecs.availability-zone",
+     "type": "spread"
+  }
+]
+```
+* `AZ balanced spread`
+* `AZ balanced binpack`
+* ...
+
+**ECS Task Placement Constraints** in Task Definition setup
+
+* `distinctInstance`: place each task on different EC2 instance
+* `memberof`:
+
+```json
+"placementConstraints" : [
+  {
+     "field": "attributes:ecs.instance-type =~ t2.*",
+     "type": "memberof"
+  }
+]
+```
 
 ## CloudFormation
 
@@ -472,3 +641,219 @@ then attach e.g "AmazonEC2FullAccess" permission
     }]
 }
  ```
+
+
+
+ ## SQS
+
+SQS scales automatically.
+ 
+A message's default rention is **4** days, and maxinum of 14 days. A message is persisted in SQS until a consumer deletes it (uses **DeleteMessageAPI**).
+
+Consumer polls SQS for messages (receive up to **10** messages at a time, default is 1)
+
+**Message Visibility Timeout** is the time that if a consumer polls a message, other consumers won't see/poll this message until specified interval (default is 30 secs) collapese, and if the first consumer doesn't delete the message via DeleteMessageAPI, then this messasge goes back to the queue and will be consumer by other consumers. Note that a consumer could call 
+
+**ChangeMessageVisibilityAPI** (for that message only, not all messages) to exent the time.
+
+**Dead Letter Queue** is a special queue for messages that reach `MaximumReceives` threshold, so that a problemtic message (or caused by consumer bug that didn't delete the message) won't be in and out the queue again and again and again. Good to set a retention of 14 days for debugging. **Redrive allow policy** let us redrive the messages from the DLQ back into the source queue e.g after we fix our consumer code.
+
+Say you have two queue, QueueA (as source queue) and QueueB (DLQ), on AWS UI, you go into QueueA's setting and set the QueueB as its DLQ. Note that AWS UI is a little bit confusing, because the wording of "Set this queue to receive undeliverable messages" radio boxes's text, "this queue" doesn't refer to QueueA, it refer to QueueB as after choose "Enabled", you select QueueB in the dropdown, so "this queue" from "Set this queue to receive undeliverable messages" mean the queue you are going to specify in the dropdown.
+
+And if you go to QueueB's UI setting in the **Redrive allow policy** you can choose Enable first (Disabled as default means allowing all source queues to use this queue as the dead-letter queue) then choose:
+* Allow All: (a little bit different than the "default allowing all", that's why it is under Enable option), 
+* By Queue: Allow a list of source queues from the same account and in the same region to use this queue as the dead-letter queue
+* Deny All: QueueB "refuse" QueueA's "request", so even QueueA set QueueB as its DLQ, but because QueueB refuses it, messages supposed to go to DLQ still stay in QueueA like nothing happen
+
+
+**Short Polling**: (`ReceiveMessageWaitTimeSeconds` being 0)  queries only a **subset of the servers** (based on a weighted random distribution) to find messages that are available to include in the response. AWS sends the response right away, even if the query found no messages.
+
+**Long Polling**: (`ReceiveMessageWaitTimeSeconds` greater than 0) queries **all of the servers** for messages. Amazon SQS sends a response after it collects at least one available message, up to the maximum number of messages specified in the request (note that it hangs around when there is no messages but it then also can return immedately if one of servers has a message and look like in this case only a single message are return due to its listener, need to dig into SQS architecture). An empty response is sent only if the polling wait time expires.
+
+Short Polling is default, it is faster and the messages can be processed quickly, but on the other hand, your server does need to make an additional calls. In the worst case, no message is returned from the request, even though messages are in the queue (because of a weighted random distribution, see https://flofuchs.com/taking-a-look-at-aws-sqs-short-and-long-polling for details). This is even more noticeable for queues that only have a few messages
+
+
+**SQS Extended Client** (Java Llibrary): send large messges by only sending real large to S3 and small metadata message (like a pointer) to SQS queue, once consumer receives this metadata message as pointer, it knows how to retreve the real large message from S3.
+
+
+**FIFO** queue: message ordering is perserved (comapred to Standard Queue who only do best-effort ordering):
+
+* **Limited throughput**, 300 msgs without batching, 3000 msgs with batching, compared to **Standard Queue** who has unlimited throughput
+* **Exact-once** (by removing duplicateds)  compared to **Standard Queue** who is **at-least once**
+
+FIFO queue also supports De-duplication interval (5mins):
+
+* **Content-based duplication**: will do a SHA-256 hash of the message body
+* **Message deduplication ID**: explicitly provide a **Deduplication ID**
+
+you can also specify "Message group ID" so messages that belong to the same message group are always processed in a strict order relative to the same message group (but not cross different message group)
+
+
+## SNS 
+
+Create a topic and add subscription such as SQS, Lambda etc. It allows **Message Filtering** so a subscription can only recieve messages that falls into the filter policy
+
+
+
+## Kinesis
+
+has a kafka partition alike concept called **Shard** and one shard can only be consumed by one consumer. If one shard receive too many data becomes a "hot" shard, you can spilt it into two shards or merging two cold shards into one shard.
+
+Consumers Types:
+
+Shared (Classic):
+* Read throughput: 2mb/sec per shard accross all consumers
+* Consumer **poll** data from Kinesis using `GetRecords` API call
+* Latency: 200ms
+* lower cost
+
+Enhanced:
+* Read throughput: 2mb/sec per consumer per shard
+* Kinesis pushes data to consumer via HTTP/2 using `SubscribeToShard` API
+* Latency: 70ms
+
+Kinesis VS SQS ordering: Let's assume 100 trucks, 5 kinesis shards VS 1 SQS FIFO
+
+Kinesis Data Streams:
+* 20 trucks per shard
+* maximum consumer number in parallel is 5
+
+SQS FIFO:
+* you will have 100 Message Group ID
+* you can have up to 100 Consumers
+
+
+Data Streams vs Firehose
+
+Streams: 
+* Kinesis data streams is highly customizable and best suited for developers building custom applications or streaming data for specialized needs.
+* Going to write custom code
+* Real time (200ms latency for classic, 70ms latency for enhanced fan-out)
+* You must manage scaling (shard splitting/merging)
+* Data storage for 1 to 7 days, replay capability, multi consumers
+* Use with Lambda to insert data in real-time to ElasticSearch
+Firehose:
+* Firehose handles loading data streams directly into AWS products for processing.
+* Fully managed, send to S3, Splunk, Redshift, ElasticSearch
+* Serverless data transformations with Lambda
+* Near real time (lowest buffer time is 1 minute)
+* Automated Scaling
+* No data storage
+
+
+
+## Observability
+
+**Metrics**: 
+EC2 metrics are sent every 5 mins by default. Detailed EC2 monitoring sends every 1 min
+
+Custom metrics:
+* Standard resolution: data haveing a **1 min** granularity
+* High resoulution: data at **1 sec** granularity
+
+using `put-metric-data` api call
+
+```bash
+#!/bin/bash    <----------------you can use `stress-ng` to run this script every minute
+
+# Create a token for IMDSv2 that expires after 60 seconds
+TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" -s`
+
+# Use the token to fetch the EC2 instance ID
+INSTANCE_ID=`curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/instance-id`
+
+# Get memory usage and put metric data to CloudWatch
+MEMORY_USAGE=$(free | awk '/Mem/{printf("%d", ($2-$7)/$2*100)}')  # <-------------------use Linux's free command and pattern scanning
+aws cloudwatch put-metric-data --region us-east-1 --namespace "Custom/Memory" --metric-name "MemUsage" --value "$MEMORY_USAGE" --unit "Percent" --dimensions "Name=InstanceId,Value=$INSTANCE_ID"
+```
+
+
+**Metric Filter** : let you turn log into metric and you can create a Alarm based on it
+
+
+reservior and rate in aws xray? what does rate mean by "additional percentage of requests" how does it know how many requests it will be in advance
+## <---------------------------------------------------need to review all concepts later after learning tracing and One Observability Workshop
+
+
+
+## Lambda 
+
+At the heart of AWS Lambda is Firecracker, a virtualization technology developed by Amazon and implemented in Rust. Firecracker powers the engine on which all Lambda functions run, providing a lightweight yet robust platform for executing code. Firecracker's unique design allows it to offer the security and workload isolation associated with virtual machines while maintaining the speed and efficiency that containers typically provide. Firecracker uses the Linux Kernel-based Virtual Machine (KVM) to create and manage microVMs. Firecracker has a minimalist design. It excludes unnecessary devices and guest functionality to reduce the memory footprint and attack surface area of each microVM.
+
+Lambda will create its execution environments on a ﬂeet of Amazon EC2 instances (bare netak EC2 uses KVM) called **AWS Lambda Workers**. Workers are bare metal Amazon EC2 AWS Nitro instances which are launched and managed by Lambda in a separate isolated AWS account which is not visible to customers
+
+
+**ALB with Lambda**:
+
+Create a ALB with security group and a target group (where you need to choose target type as "Lambda function")
+
+ALB transits http request to json to Lambda and then ALB transits Json response from Lambda to Http response. ALB support **multi-header** value via ALB settings, so a Http request passes from client suc as http://example.com/path?name=foo&name=bar   ---->  ALB (invoke Lambda with `{ "queryStringParameters": { "name" : ["foo", "bar"]}}` ) ----> Lambda
+
+```bash
+## sync
+aws lambda invoke --function-name mytestfunction --payload BASE64-ENCODED-STRING response.json  # default invocation-type for sync is RequestResponse
+
+## async, Lambda will retry 3 times on errors, you can setup a Dead-Letter queue for Lambda to publish over-error event to SQS
+aws lambda invoke --function-name mytestfunction --invocation-type Event --payload BASE64-ENCODED-STRING response.json  ## --invocation-type Event flag makes it async
+```
+
+
+**Event Sourcing Mapping** 
+
+Lambda -----poll SQS queue------->  SQS  <-------------message added by user
+  |
+  |--------> event written to CW
+
+
+```bash
+# create a role for Lambda with AWSLambdaSQSQueueExecutionRole policy and attached to the lambda function below
+aws lambda create-function --function-name EventSourceSQS --zip-file fileb://function.zip --handler index.handler --runtime nodejs16.x --role arn:aws:iam::211125381467:role/my-sqs-role
+
+## create a event source mapping, this is equivalent to "Add Trigger" in UI which connected to SQS logo 
+aws lambda create-event-source-mapping --function-name EventSourceSQS --batch-size 10 --event-source-arn arn:aws:sqs:ap-southeast-2:211125381467:MyQueue
+
+aws lambda list-event-source-mappings --function-name EventSourceSQS --event-source-arn arn:aws:sqs:ap-southeast-2:211125381467:MyQueue
+
+aws lambda delete-event-source-mapping --uuid c3dbb673-e9d7-4328-9de1-a03ffb969c7d  ## uuid is generated by create-event-source-mapping
+```
+
+```json
+// AWSLambdaSQSQueueExecutionRole policy
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "sqs:ReceiveMessage",
+                "sqs:DeleteMessage",
+                "sqs:GetQueueAttributes",
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+**Version and Aliases**
+
+```bash
+## Invoke Lambda versions
+aws lambda invoke --function-name myversiontest response.json
+aws lambda invoke --function-name myversiontest:\$LATEST response.json  ## Lambda automatically use $LATEST
+
+## modify the code and click "Deploy", click "Publish new version", then you specify a version name e.g v1 or z1 (Lambda will only use integer e.g 1, 2, 3 later in the dropdown)
+aws lambda invoke --function-name myversiontest:1 response.json
+
+## modify the code again ....
+aws lambda invoke --function-name myversiontest:2 response.json
+
+## Create an alias (note that alias name cannot be a integer because number is for version, string is for alias) and Invoke Lambda alias
+aws lambda invoke --function-name myversiontest:myapp response.json
+## you can shift traffic between two version when createing an alias by specifying a weight to each version such as myversiontest:1 and myversiontest:2
+```
+
+  
