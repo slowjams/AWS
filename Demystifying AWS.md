@@ -1,11 +1,22 @@
 ## Demystifying AWS
 
-# IAM
+# Animals4Life
 
-It is not recommended to use access key for root users. You can create at most 2 access keys for an IAM user (rotating purpose).
+BNE HQ:   `192.168.10.0/24`, `10.0.0.0/16` (AWS Pilot),
+                             `172.31.0.0/16` (Azure Pilot)
+London:   `192.168.15.0/24`
+New York: `192.168.20.0/24`
+Seattle:  `192.168.24.0/24`
+Google:   `10.128.0.0/9`  (previous vendor's usage)
 
+Design:
 
-# VPC
+* Reserve at least networks per region per account for buffering
+* 3 × US regions, 1 × Europe region, 1 × Australia region, 4 × AWS accounts: (3 + 1 + 1) × 2 × 4 = 40 ranges (ideally)
+* 4 AZs: AZ-A, AZ-B, AZ-C, AZ-Future
+* 4 Tiers: **Web**, **App**, **Db**, **Spare**
+
+# VPC (Virtual Private Cloud)
 
 ```bash
 # private address ranges
@@ -15,14 +26,14 @@ It is not recommended to use access key for root users. You can create at most 2
 ```
 
 ```bash
-# default VPC, always the same for all different region
-172.31.0.0/16
+# default VPC
+172.31.0.0/16  # <-------------------------------------------------------------------------default VPC is not recommended to use, seel later in the course and come back edit the reason
 
-# default us-east-2 subnets   last two octets         each network/subnet's host range        each subnet maps to an AZ
-172.31.0.0/20                0000|0000,00000000     start 172.31.0.0  end 172.31.15.255          us-east-2a
-172.31.16.0/20               0001|0000,00000000     start 172.31.16.0 end 172.31.31.255          us-east-2b
-172.31.32.0/20               0010|0000,00000000     start 172.31.32.0 end 172.31.47.255          us-east-2c
-
+# default ap-southeast-2 subnets   last two octets         each network/subnet's host range        each subnet maps to an AZ
+172.31.0.0/20                     0000|0000,00000000       start 172.31.0.0  end 172.31.15.255          ap-southeast-2a
+172.31.16.0/20                    0001|0000,00000000       start 172.31.16.0 end 172.31.31.255          ap-southeast-2b
+172.31.32.0/20                    0010|0000,00000000       start 172.31.32.0 end 172.31.47.255          ap-southeast-2c
+#... extend in the future
 
 # default us-west-2 subnets    each subnet maps to an AZ
 172.31.0.0/20                       us-west-2c  # not sure why 'c' map for lower addreeses
@@ -31,11 +42,14 @@ It is not recommended to use access key for root users. You can create at most 2
 172.31.48.0/20                      us-west-2d
 ```
 
-## Default VPC Facts:
+You can connect and peer two VPCs (e.g  connect `10.0.0.0/16` with `10.1.0.0/16`)
 
-* One per region - can be deleted & recreated. So a region in theory could have zero default VPC (if you delete it), but some AWS services assume default vpc will be present, so you should leave the default vpc active (do not delete or deactive it), but don't use default VPC for production.
-* CIDR is always `172.31.0.0/16`
-* /20 for every subnet
+## VPC Facts:
+
+* Minimum `28` (16 IPs), maximum `16` (65536 IPs)
+* One default VPC (dVPC) per region - can be deleted & recreated. So a region in theory could have zero default VPC (if you delete it), but some AWS services assume default vpc will be present, so you should leave the default vpc active (do not delete or deactive it), but don't use default VPC for production.
+* CIDR for dVPC is always `172.31.0.0/16` which is the same for all different regions, it can contain upto  **16** subnets/AZs for `/20` (like cutting an cake into multiple pieces)
+* `/20` for every subnet
 * Subnets assign serivces public ip address
 
 
@@ -92,10 +106,153 @@ Outputs:
 
 ## IAM
 
+It is not recommended to use access key for root users. You can create at most 2 access keys for an IAM user (rotating purpose).
+
 * inline policy is for a single IAM user, so inline policy cannot be searched in the console UI (because it cannot be assigned to other IAM users)
-* An IAM user can be a member of maximum **10** grouprs and there is a **5,000** IAM user limit for an account
+* An IAM user can be a member of maximum **10** groups and there is a **5,000** IAM user limit for an account, and there is no limit on how many users can be in a single group, 
+so you could have all 5,000 users in a single user group 
+* There is a limit of **300** groups per account but it can be increased via support ticket
+* There is no nesting in group (group within group) and groups (just a container for users only, that's it) are not a true identity so they can't be referenced as a principal in a policy
 
 
+IAM role contains two kinds of polilcies: 
+
+**Trust Policy** (control who can assume the role), below is a trust policy, only trust policy has "Principal" section and the "Action" has to be "sts:AssumeRole"
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { // <----------------------- trust policy has Principal, while permission policy doesn't
+        "AWS": "arn:aws:iam::794303841582:user/Paul",  // this is ARN for user Paul
+      },
+      "Action": "sts:AssumeRole"  // sts is short for "security token service"
+    }
+  ]
+}
+```
+
+**Permissions Policy**
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Action": "ec2:*",
+      "Effect": "Allow",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+**AWS Security Token Service** (STS) involves when an identity **assumes** a IAM role (`sts:AssumeRole` API call), 
+STS create temporary (short-term) security credentials (like user's long-live access key pair except STS access key pairs don't belong to identity and it has expire time)
+for EC2 instance to access resource. 
+
+So the steps are:
+
+1. Create user Paul and copy the arn
+2. Create a role:
+  a. (click custom policy) configure trust policy by copying Paul's arn
+  b. add  permission policy
+  c. Click Create the role and name it e.g EC2-Full-Access and copy the link of this role
+3. Login as Paul in incognito mode of your browser, and click Switch role, now Paul can have full EC2 operations.
+
+When you check upon on a Role, you can click "Trust relationships" tab to see the Trust Policy attached to it.
+
+The **default** time for an STS session is **12 hours** and  the duration of a session can be customized to a range of **15 minutes to 36 hours**
+
+**STS checks the role's TRUST Policy first and if the identity is allowed to assume the rule then STS reads the permission policy**, if permission allows, then STS creates a  security credential 
+thats consists of `AccessKeyId`, `Expiration`, `SecretAccessKey` (used to sign request), and `SessionToken` (needs to be included in every request) and credential is returned to the identity that request them
+
+==========================================================================
+
+
+## AWS Organization and Service Control Policy
+
+```yml
+# Organizational structure, contains two Organizational units (OUs) 
+
+Root
+  |
+  DEV (OU)
+    |
+    shoppigsau-development (memember account)  
+    890742603224 | shoppigsau+development@gmail.com
+# created directly (of course you have to provide unique email address but no credit card info is needed) in management account and automatically become part of this organization
+# note that you cannot access this account directly (also there is no root user) and it can only be accessed by switching role from management account
+  |
+  PROD (OU)
+     |
+     shoppigsau-production (memember account)  
+     221082202222 | shoppigsau+production@gmail.com
+# received invition from management account and accept it then become part of this organization
+  | 
+  shoppigsau-general (management account)  
+  242201314143 | shoppigsau@gmail.com
+# Organization is created in management account, so this account becomes the management/master account
+   
+```
+
+When you create an new aws account in a organization, `OrganizationAccountAccessRole` (OAAR) that has admin rights in that account is automatically created, if you invite an existing aws account (note that you will be using management account to send invitation to the account) to join the organization, then you have to manually create the role so that management account can assume it. Management account doesn't have any role such as OAAR being created.
+
+When you assume an account's OAAR, it is like you login in to the account manually.
+
+**Service Control Policy** (SCP) can be attached on Organizational unit level. However SCP cannot be applied on management account, AWS will popup error message *You can apply SCPs to only member accounts in an organization. They have no effect on users or roles in the management account*  if you try to attach a SCP to management account.
+
+Note that when SCP is applied on a member account, **it can have an effect such as limit the account rooter user's permissions**, it is true that you cannot directly restrict root user, but SCP can indirectly restrict root user.
+
+When you enable SCP (on management account), AWS apply a default policy called `FullAWSAccess` which has full AWS access as:
+
+```json
+// default SCP, this is call "Deny List" (as you need to explicit add Deny) against "Allow List"
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "*",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+then you can apply a SCP on PROD with SCP being:
+
+```json
+// SCP
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Deny",
+      "Action": "s3:*",
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+remember when you switch to PROD from management account, you are assuming the `OrganizationAccountAccessRole` in PROD account and this OAAR has full admin access, but since this SCP denies S3 operation, you won't be able to use S3 service
+
+====================================================
+
+
+## CloudWatch Logs
+
+A **Log Stream** is a series log events from the **same source/instance**, a **Log Group** consists multiple Log Stream
+
+
+## CloudTrail
+
+* Logs AWS's own Product's event
+* **90** days stored by default in **Event History**, enabled by default, which has no cost for 90 days
+* Log **Management Event** (Terminate an EC2 instance etc) and **Data** Events (an obejct is uploaded to S3), by default only logs Management Events
 
 
 
@@ -138,52 +295,7 @@ A `VPC` is a logically isolated portion within a region. A VPC can contain multi
 #### IAM
 
 
-IAM role contains two kinds of polilcies: 
 
-**Trust Policy** (control who can assume the role), below is a trust policy, only trust policy has "Principal" section and the "Action" has to be "sts:AssumeRole"
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "AWS": "arn:aws:iam::794303841582:user/Paul",  // this is ARN for user Paul
-      },
-      "Action": "sts:AssumeRole"  // sts is short for "security token service"
-    }
-  ]
-}
-```
-
-**Permissions Policy**
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Action": "ec2:*",
-      "Effect": "Allow",
-      "Resource": "*"
-    }
-  ]
-}
-```
-
-**AWS Security Token Service** (STS) involves when a service such as EC2 instance **assumes** a IAM role (`sts:AssumeRole` API call), STS create temporary security credentials for EC2 instance to access resource
-
-So the steps are:
-
-1. Create user Paul and copy the arn
-2. Create a role:
-  a. (click custom policy) configure trust policy by copying Paul's arn
-  b. add  permission policy
-  c. Click Create the role and name it e.g EC2-Full-Access and copy the link of this role
-3. Login as Paul (Paul doesn't have permission at the moment to use EC2 service), and click Switch role, now Paul can have full EC2 operations.
-
-When you check upon on a Role, you can click "Trust relationships" tab to see the Trust Policy attached to it.
 
 ================================================================================================================================================
 
@@ -587,10 +699,11 @@ For Fargate: each task gets a unique private ip adddress, there is no host port 
 
 ## CloudFormation
 
-**Service Role**:
-Image current user Paul doesn't have permission to create EC2 instance but the senior developer still assigne a CloudFormation template for him to execute. That's how "Service Role" comes into play when Paul is createing a stack he can specify a service role for CloudFormation to perform tasks. Below is the steps:
+**Service Role or Service-linked Role**:
 
-1. Create a service role e.g  **CloudFormationServiceRole** that specify CloudFormation has permission to create EC2 instance. Its trust entity is like:
+Image current user Paul doesn't have permission to create an EC2 instance but the senior developer still assign a CloudFormation template for him to execute. That's how "Service Role" comes into play when Paul is createing a stack he can specify a service role for CloudFormation to perform tasks. Below is the steps:
+
+1. Create a **service role** e.g  **CloudFormationServiceRole** that specify CloudFormation has permission to create EC2 instance. Its trust entity is like:
 
 ```json
 {
@@ -611,8 +724,8 @@ Image current user Paul doesn't have permission to create EC2 instance but the s
 then attach e.g "AmazonEC2FullAccess" permission
 
 
-2. Create a user role e.g **IAMPassRole** where you specify
-  *  a trust policy that Paul can assume rule
+2. Create a **user role** where you specify a trust policy that Paul can assume rule
+
  ```json
  {
   "Version": "2012-10-17",
@@ -627,7 +740,7 @@ then attach e.g "AmazonEC2FullAccess" permission
   ]
 }
 ```
- * a permission that is attached to the role
+ * a permission that is attached to the user role above
 
  ```json
  {
@@ -636,6 +749,7 @@ then attach e.g "AmazonEC2FullAccess" permission
         "Effect": "Allow",
         "Action": [
             "iam:PassRole"  // <----------------PassRole is needed, what it means is "Paul can attach 'CloudFormationServiceRole' as service role to CF
+                            // also note that Paul doesn't have permission to create EC2 instances, however when he uses CF (assumes that Paul has permission to use CF), CF can create EC2 instance
         ],
         "Resource": "arn:aws:iam::<account-id>:role/CloudFormationServiceRole"
     }]
