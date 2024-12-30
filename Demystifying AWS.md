@@ -11,10 +11,27 @@ Google:   `10.128.0.0/9`  (previous vendor's usage)
 
 Design:
 
-* Reserve at least networks per region per account for buffering
-* 3 × US regions, 1 × Europe region, 1 × Australia region, 4 × AWS accounts: (3 + 1 + 1) × 2 × 4 = 40 ranges (ideally)
-* 4 AZs: AZ-A, AZ-B, AZ-C, AZ-Future
-* 4 Tiers: **Web**, **App**, **Db**, **Spare**
+~~Single Tier~~:
+* Reserve at least **2** subnets/networks per region per account for buffering
+* **40 ranges/subnets**: 3 × US regions, 1 × Europe region, 1 × Australia region, 4 × AWS accounts: (3 + 1 + 1) × 2 × 4 = 40
+* Use the `10.16.0.0/16` -> `10.127.0.0/16` to avoid common such as `10.8.0.0`, and Google's reserved above
+* <--------------------------why no overlapping ranges????
+
+Multi-Tiers:
+
+* **4 AZs**: AZ-A, AZ-B, AZ-C, AZ-Future
+* **4 Tiers**: **Web**, **App**, **Db**, **Spare**
+
+```bash 
+# 10.16.0.0/16
+##-------------------------------------------------------------------------V us-east-1
+#AZ       Reserved            DB               App                Web
+AZ-A    10.16.0.0/20     10.16.16.0/20     10.16.32.0/20     10.16.48.0/20
+AZ-B    10.16.64.0/20    10.16.80.0/20     10.16.96.0/20     10.16.112.0/20
+AZ-C    10.16.128.0/20   10.16.144.0/20    10.16.160.0/20    10.16.176.0/20
+#AZ-X   10.16.192.0/20   10.16.208.0/20    10.16.224.0/20    10.16.240.0/20
+##-------------------------------------------------------------------------Ʌ us-east-1
+```
 
 # VPC (Virtual Private Cloud)
 
@@ -29,11 +46,11 @@ Design:
 # default VPC
 172.31.0.0/16  # <-------------------------------------------------------------------------default VPC is not recommended to use, seel later in the course and come back edit the reason
 
-# default ap-southeast-2 subnets   last two octets         each network/subnet's host range        each subnet maps to an AZ
+# default ap-southeast-2 subnets    last two octets         each network/subnet's host range        each subnet maps to an AZ
 172.31.0.0/20                     0000|0000,00000000       start 172.31.0.0  end 172.31.15.255          ap-southeast-2a
 172.31.16.0/20                    0001|0000,00000000       start 172.31.16.0 end 172.31.31.255          ap-southeast-2b
 172.31.32.0/20                    0010|0000,00000000       start 172.31.32.0 end 172.31.47.255          ap-southeast-2c
-#... extend in the future
+#... extend and map your custom subnet into one AZ
 
 # default us-west-2 subnets    each subnet maps to an AZ
 172.31.0.0/20                       us-west-2c  # not sure why 'c' map for lower addreeses
