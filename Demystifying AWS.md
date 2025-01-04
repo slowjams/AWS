@@ -61,6 +61,7 @@ AZ-C    10.16.128.0/20   10.16.144.0/20    10.16.160.0/20    10.16.176.0/20
 
 You can connect and peer two VPCs (e.g  connect `10.0.0.0/16` with `10.1.0.0/16`)
 
+
 ## VPC Facts:
 
 * Minimum `28` (16 IPs), maximum `16` (65536 IPs)
@@ -68,7 +69,91 @@ You can connect and peer two VPCs (e.g  connect `10.0.0.0/16` with `10.1.0.0/16`
 * CIDR for dVPC is always `172.31.0.0/16` which is the same for all different regions, it can contain upto  **16** subnets/AZs for `/20` (like cutting an cake into multiple pieces)
 * `/20` for every subnet
 * Subnets assign serivces public ip address
+* A VPC has DHCP Options Set that applied to itself, and this DHCP setting flows into its subnets
+* Every VPC has a **VPC Router**, see `10.16.0.1`- VPC Router below. VPC Router manages the traffic between subnets (in same VPC of course) and between a subnet with AWS Public Zone such as Internet Gateway, note that the traffic can be controlled by **Route Table** of subnets. Every subnet comes with a default Route Table (e.g the one in next section where the first two entries are the default ones).
+* An **Internet Gateway** (`IGW`)is region resilient (works for all AZs) and can be attached to a VPC
+* For ipv4, no public ip address is assigned to e.g EC2 instance as `IGW` assoicates the instance's private address with a public ip address via translation (this process is called **static NAT**), so OS won't be able to see the IPv4 address. However for IPv6, public ip addresses are directly assigned to instances (underlying OS can see ipv6 public address). 
 
+
+## Subnets
+
+A subnetwork of a VPC, 1 subnet can only be placed in 1 AZ, a subnet can never span over multiple AZs, while an AZ can contain multiple subnets
+
+There are 5 reserved IP address in every subnet which cannot be used, for example  `10.16.0.0/20`
+* `10.16.0.0`- Network Address that represents the subnet itself
+* `10.16.0.1`- VPC Router
+* `10.16.0.2`- Reserved DNS
+* `10.16.0.3`- Reserved for future use
+* `10.16.31.255`- Broadcast Address
+
+## Create Public Subnets
+
+1. Create the VPC and its subnets
+2. Create an Internet Gateway (says it is `igw-x`) to assoicate it with the VPC you create
+3. Create a new Route Table and then click "Edit Subnet Associations" to associate the subnets you created. BY doing this, those subnets are not longer using the main route table of the VPC
+4. Add two routes in the newly created Route Table:
+```bash
+# Dest             Target     ... the first two routes automatically created for every subnet you created
+# xxx::/56         local      default ipv6 route
+# 10.16.0.0/16     local      default ipv4 route 
+0.0.0.0/0          igw-x
+::/0               igw-x
+```
+You also need to enable "Enable auto assign public IPv4/IPv6 address" in each subnet's setting
+
+
+## Network Access Control Lists (NACL)
+
+* Stateless and created on **VPC** level and  apply on **subnet** level 
+* traffic between same subnet won't be impacted by NACLs (compared to SG, traffic between same subnet will be impacted)
+* Allow explicit deny (compared to SG which supports explicit deny)
+
+Default NACLs (automatically created when a subnet is created) for inbound and outbound as below shows:
+
+```bash
+# Inbound Rules (2)
+# Rule Number                Type           Protocol      Port range     Source        Allow/Deny
+# 100                      All trafic         All            All        0.0.0.0/0         Allow   <----------default one which means a subnet is implicitly allow any requests
+# *                        All trafic         All            All        0.0.0.0/0         Deny    <----------always in there and cannot be removed
+
+# Outbound Rules (2)
+# Rule Number                Type           Protocol      Port range     Source        Allow/Deny
+# 100                      All trafic         All            All        0.0.0.0/0         Allow   <----------default one which means a subnet is implicitly allow any requests
+# *                        All trafic         All            All        0.0.0.0/0         Deny    <----------always in there and cannot be removed
+```
+
+Rules are processed **in order**, lowest rule number first. Once a match occurs, processing stops. "*" is an implicit deny if nothing else mathes.
+Each network ACL also includes **a rule whose rule number is an asterisk (*). This rule ensures that if a packet doesn't match any of the other numbered rules, it's denied. You can't modify or remove this rule**. Note that default NACLs for a VPC has a default "implict allow" rule (which has rule number 100) which reduces admin overhead while custom NACLs is different.
+
+Custom NACLs is created for a specific VPC and are **initially assoicated with no subnets**, and there is no "implicit allow"  any more:
+```bash
+# Inbound Rules (1)
+# Rule Number                Type           Protocol      Port range     Source        Allow/Deny
+# *                        All trafic         All            All        0.0.0.0/0         Deny 
+
+# Outbound Rules (1)
+# Rule Number                Type           Protocol      Port range     Source        Allow/Deny
+# *                        All trafic         All            All        0.0.0.0/0         Deny 
+```
+so Custom NACLs are **implicit deny** by default
+
+
+## Security Group
+
+* Apply on instance level compared to the NACLs which applys on subnet level
+* Statefull, so allow request = allow response
+* No explicit deny (compared to NACLs which supports explicit deny), only allow or implicit deny
+* Cannot block specific bad IP
+* Support IP/CIDR, logical resource, other security group and itself. When sg is used in Source, it means "any instace in the sg"
+* Attched to Elastic network interfaces (ENI, which is associated with an instance) not instances itself (even if the UI shows it this way)
+
+```bash
+# Inbound Rules (1)
+
+#   Type           Protocol      Port range     Source       Description-optional
+# Custom TCP         TCP            443         sg-xx               xxx
+
+```
 
 # EC2
 
