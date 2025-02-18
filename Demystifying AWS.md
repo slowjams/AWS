@@ -279,6 +279,18 @@ so Custom NACLs are **implicit deny** by default
 * Since EC2 is AZ Reliant, all related network, persistent storage (EBS etc) are per AZ. So if an AZ in AWS experience major issues, it impacts all of those things
 * Restart an EC2 instance, the instance will be on the same host; Stop an EC2 instance and start it (different than restarting) will result the instance in a different host (still in same AZ)
 
+
+# EC2 Placement Group
+
+Background knowledge: Each rach has its own network and power source
+
+1. `Cluster`: instances are placed into **same rack** (same AZ of course) in datacentre, often same host, so lowest latency and 10Gbps speed communication between instances. However, it offer little resilient as if the physical fails all instances are down. When you create a cluster group, you don't specify an AZ, it is the first instance being placed into a AZ then the AZ is locked for further placements. Only certain supported instance type can be used with this cluter placement group
+
+2. `Spread`: maximize resilient by placing each instance into **distict rack** across mutiple AZs (each instance runs from a different rack. Inside a same AZ, each difference still run on different rack). For example, you want to lauch 6 instances, then 3 (a, b, c) instances are in AZA, 3 (d, e, f) instances are in AZB, for instance in same AZ, each instance are placed into distict rack physical hardware, so that if one fails e.g `a`'s rack's physical machine got power down, the rest of 2 instances (b, c) are still working. Spread placement has a limit of **maximum 7 instance per AZ**. Not supported for Dedicated Instances or Hosts
+
+3. `Partition`: similar to Spread, but it is **maximum 7 partition group per AZ**, inside a artition group, you can lauch as many as instance you want. Each partition group has its  own rack. You can choose the partition to lauch an instance or auto placed
+
+
 # EC2 Categories
 
 example instance type: `R5dn.8xlarge`:
@@ -395,7 +407,7 @@ curl http://169.254.169.254/latest/meta-data/iam/security-credentials/YourInstan
 
 * Reserved: get discount for committing to run an instance for 1 up to 3 years, you will be charged even you don't use/start these instances.
 
-* Dedicated Instance: no other AWS Account will run an instance on the same Host, but other instances (both dedicated and non-dedicated) from the same AWS Account might run on the same Host. Just like you're hiring a small laptop. But if you stop/restart that laptop, next time, you're hiring another laptop.
+* Dedicated Instance: no other AWS Account will run an instance on the same Host, but other instances (both dedicated and non-dedicated) from the same AWS Account might run on the same Host. Just like you're hiring a small laptop. if you stop/restart that laptop, next time, you're hiring another laptop and only you can use this laptop.
 
 * Dedicated Host: No Per Instance Charge, since you already purchase the whole physical server; used for requirements of licensing based on sockets/cores. Similar to dedicated instance, but guess what, that laptop is yours, forever, as long as you pay the bill. You stop/restart that laptop, next time you still boot on the same laptop. But usually this laptop is huge, and the price is a lot more expensive
 
@@ -720,7 +732,8 @@ remember when you switch to PROD from management account, you are assuming the `
 ====================================================
 
 
-## CloudWatch Logs
+## CloudWatch (for metrics) and CloudWatch Logs (for logging)
+
 
 `Namespace`  :  container for metric e.g `AWS/EC2` & `AWS/Lambda`, `AWS` prefix is for namespace created by AWS
 `Datapoint`  :  Every datapoint has a Timestamp, Value and (optional) an unit of measure, e.g EBS IOPS, a datapoint is : { TimeStamp: "20240110T09:27:33", Value: 1000, unit: "count"}
@@ -732,6 +745,21 @@ remember when you switch to PROD from management account, you are assuming the `
 
 A **Log Stream** is a series log events from the **same source/instance**, a **Log Group** consists multiple Log Stream
 
+```bash
+# download agent locally
+wget https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
+
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-config-wizard # accept all defaults, until default metrics .. pick advanced
+
+# then when asking for log files to monitor
+/var/log/httpd/access_log   # enter this file name twice as file and log group are the same
+## ... configure log group, log stream with instance id and so on
+
+# Config can also be stored in /opt/aws/amazon-cloudwatch-agent/bin/config.json and stored in SSM but you need to attach an instance role with sufficient permission
+
+# Load Config and start agent
+sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c ssm:AmazonCloudWatch-linux -s
+```
 
 ## CloudTrail
 
