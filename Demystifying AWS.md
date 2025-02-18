@@ -23,15 +23,33 @@ Multi-Tiers:
 * **4 Tiers**: **Web**, **App**, **Db**, **Spare**
 
 ```bash 
-# 10.16.0.0/16
+# You custom VPC's CIDR: 10.16.0.0/16
 ##-------------------------------------------------------------------------V us-east-1
-#AZ       Reserved            DB               App                Web
+#AZ       Reserved            Db               App             Web (public)
 AZ-A    10.16.0.0/20     10.16.16.0/20     10.16.32.0/20     10.16.48.0/20
 AZ-B    10.16.64.0/20    10.16.80.0/20     10.16.96.0/20     10.16.112.0/20
 AZ-C    10.16.128.0/20   10.16.144.0/20    10.16.160.0/20    10.16.176.0/20
-#AZ-X   10.16.192.0/20   10.16.208.0/20    10.16.224.0/20    10.16.240.0/20
+#AZ-X   10.16.192.0/20   10.16.208.0/20    10.16.224.0/20    10.16.240.0/20   # AZ-X is for Reserved
 ##-------------------------------------------------------------------------Ʌ us-east-1
 ```
+
+```bash
+# Route Table for Public Subnets (Web)--------------------------------V
+
+# Destination        Target
+10.16.0.0/16         local  # VPC's CIDR, not subnet's CIDR, as it is easier to associate a route table with multiple subnets that falls into criteria as you see in NAT section
+0.0.0.0/0            igw-xxx
+#---------------------------------------------------------------------Ʌ
+
+# Route Table for Private Subnets (Db, App)---------------------------V
+
+# Destination              Target
+10.16.0.0/16               local      # VPC's CIDR, not subnet's CIDR
+#---------------------------------------------------------------------Ʌ
+```
+
+The VPC Router knows about all the subnet CIDR ranges, they are subsets of the VPC CIDR range. In a route table, the `local` entry is usually **configured with the CIDR range of the entire VPC**. When an instance sends a packet to VPC Router, it looks up the route table, and sees that the destination is "local", i.e. another host in the same VPC, it would then look through the subnet CIDR ranges, sees that private is in another subnet's range, and so routes the packets there.
+
 
 # VPC (Virtual Private Cloud)
 
@@ -40,11 +58,15 @@ AZ-C    10.16.128.0/20   10.16.144.0/20    10.16.160.0/20    10.16.176.0/20
 10.0.0.0     -   10.255.255.255  (CIDR block: 10.0.0.0/8)
 172.16.0.0   -   172.31.255.255  (CIDR block: 172.16.0.0/12)
 192.168.0.0  -   192.168.255.255 (CIDR block: 192.168.0.0/16)
+
+169.254.0.0  -   169.254.255.255 (CIDR block: 169.254.0.0/16)  link-local addresses fall within the range of 
 ```
 
 ```bash
 # default VPC
 172.31.0.0/16  # <-------------------------------------------------------------------------default VPC is not recommended to use, seel later in the course and come back edit the reason
+
+# you can create a custom VPC with CIDR block 10.16.0.0/16
 
 # default ap-southeast-2 subnets    last two octets         each network/subnet's host range        each subnet maps to an AZ
 172.31.0.0/20                     0000|0000,00000000       start 172.31.0.0  end 172.31.15.255          ap-southeast-2a
@@ -65,19 +87,30 @@ You can connect and peer two VPCs (e.g  connect `10.0.0.0/16` with `10.1.0.0/16`
 ## VPC Facts:
 
 * Minimum `28` (16 IPs), maximum `16` (65536 IPs)
+
 * One default VPC (dVPC) per region - can be deleted & recreated. So a region in theory could have zero default VPC (if you delete it), but some AWS services assume default vpc will be present, so you should leave the default vpc active (do not delete or deactive it), but don't use default VPC for production.
+
 * CIDR for dVPC is always `172.31.0.0/16` which is the same for all different regions, it can contain upto  **16** subnets/AZs for `/20` (like cutting an cake into multiple pieces)
+
 * `/20` for every subnet
+
 * Subnets assign serivces public ip address
+
 * A VPC has DHCP Options Set that applied to itself, and this DHCP setting flows into its subnets
-* Every VPC has a **VPC Router**, see `10.16.0.1`- VPC Router below. VPC Router manages the traffic between subnets (in same VPC of course) and between a subnet with AWS Public Zone such as Internet Gateway, note that the traffic can be controlled by **Route Table** of subnets. Every subnet comes with a default Route Table (e.g the one in next section where the first two entries are the default ones).
+
+* Every VPC has a **VPC Router**, see `10.16.0.1`- VPC Router below. The primary function of this VPC router is to take all of the route tables defined within that VPC, and then direct the traffic flow within that VPC, as well as to subnets outside of the VPC, based on the rules defined within those tables. VPC Router manages the traffic between subnets (in same VPC of course) and between a subnet with AWS Public Zone such as Internet Gateway, note that the traffic can be controlled by **Route Table** of subnets. Every subnet comes with a default Route Table (e.g the one in next section where the first two entries are the default ones).
+
 * An **Internet Gateway** (`IGW`)is region resilient (works for all AZs) and can be attached to a VPC
-* For ipv4, no public ip address is assigned to e.g EC2 instance as `IGW` assoicates the instance's private address with a public ip address via translation (this process is called **static NAT**), so OS won't be able to see the IPv4 address. However for IPv6, public ip addresses are directly assigned to instances (underlying OS can see ipv6 public address). 
+
+* For ipv4, no public ip address is assigned to e.g EC2 instance, **public IP addresses are assigned to an Elastic Network Interface (ENI)**. An instance can have multiple ENIs. and  `IGW` assoicates the instance's private address with a public ip address via translation (this process is called **static NAT**), so OS won't be able to see the IPv4 address. However for IPv6, public ip addresses are directly assigned to instances (underlying OS can see ipv6 public address). 
+When you lauch a new EC2 instance, you get one public DNS name someting like `ec2-3-89-7-136.compute-1.amazonaws.com`, one **primary** private IPV4 address and one public IPV4 address (will change when you stop and start the EC2 instance), inside the VPC, the public DNS name always resolves to the private ip address and outside in public internet, the public DNS name resolve to the public ip address. Note that EC2 instance can be attached mutiple ENI (Elastic Network Interface) and each ENI has its private IP address, and you can have one elastic ip per pirvate IPV4 address
+
+Note that for most of online course that instructs to create an EC2 instance then change security group to enable SSH on port 22 then remote connect to the instance, this work because you create the EC2 instance in default VPC's subnets which are all public subnets by default and those public subnets are connected to default IGW.
 
 
 ## Subnets
 
-A subnetwork of a VPC, 1 subnet can only be placed in 1 AZ, a subnet can never span over multiple AZs, while an AZ can contain multiple subnets
+A subnetwork of a VPC, **1 subnet can only be placed in 1 AZ, a subnet can never span over multiple AZs**, while an AZ can contain multiple subnets
 
 There are 5 reserved IP address in every subnet which cannot be used, for example  `10.16.0.0/20`
 * `10.16.0.0`- Network Address that represents the subnet itself
@@ -89,17 +122,102 @@ There are 5 reserved IP address in every subnet which cannot be used, for exampl
 ## Create Public Subnets
 
 1. Create the VPC and its subnets
-2. Create an Internet Gateway (says it is `igw-x`) to assoicate it with the VPC you create
-3. Create a new Route Table and then click "Edit Subnet Associations" to associate the subnets you created. BY doing this, those subnets are not longer using the main route table of the VPC
+2. Create an Internet Gateway (says it is `igw-xxx`) to assoicate it with the VPC you create
+3. Create a new Route Table per public subnet and then click "Edit Subnet Associations" to associate the public subnet (e.g `Web`) you created. By doing this, those subnets are not longer using the main route table of the VPC
 4. Add two routes in the newly created Route Table:
-```bash
-# Dest             Target     ... the first two routes automatically created for every subnet you created
-# xxx::/56         local      default ipv6 route
-# 10.16.0.0/16     local      default ipv4 route 
-0.0.0.0/0          igw-x
-::/0               igw-x
+
+```bash 
+# VPC CIDR Range 10.16.0.0/16
+##-------------------------------------------------------------------------V
+#AZ     Db (private)       App (private)      Web (public)
+AZ-A    10.16.16.0/20     10.16.32.0/20      10.16.48.0/20
+                                                 |-----------------------------> VPC Router----------> igw-xxx # all 3 public subnets connect to same igw since
+                                                                                  Ʌ  Ʌ                         # internet gateway is region resilient
+AZ-B    10.16.80.0/20     10.16.96.0/20      10.16.112.0/20                       |  |
+                                                 |--------------------------------|  |
+                                                                                     |
+AZ-C    10.16.144.0/20    10.16.160.0/20     10.16.176.0/20                          |
+                                                 |-----------------------------------|
+##-------------------------------------------------------------------------Ʌ
+
+#---------------------------------------------------------------------V
+# default route table for public subnet "Web" when this subnet is created 
+#and this route table is auto assocaited with this subnet by default
+
+# Destination              Target
+10.16.0.0/16               local
+#---------------------------------------------------------------------Ʌ
+
+#---------------------------------------------------------------------------------V
+# New route table created and associated by you for public subnet "Web"
+
+# Destination              Target
+10.16.0.0/16               local
+0.0.0.0/0                  igw-xxx
+#---------------------------------------------------------------------------------Ʌ
 ```
 You also need to enable "Enable auto assign public IPv4/IPv6 address" in each subnet's setting
+
+
+## NAT Gateway
+
+* NAT Gateway is **not regionally resilient** (`IGW` is), NATGW is AZ level resilient which means you needs to add a NATGW per AZ (when you create a NATGW, you need to specify the subnet you want it to work at)
+* EC2 instances (no public ip) that route to NATG can only initial outbound connections, outsite internet cannot initial inbound connections to those instances
+* Exam Question on NAT Instance (An EC2 Instance), you need to **disable "Source and Destination Checks"** (source or destination needs to be the EC2 instance itself and this setting is on by default) to make an EC2 instance eligible to be an NAT instance first, then SSH to the instance and run the following command:
+```bash
+# Turning on IP Forwarding
+echo "net.ipv4.ip_forward = 1" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+# Making a catchall rule for routing and masking the private IP
+sudo iptables -t nat -A POSTROUTING -o ens5 -s 0.0.0.0/0 -j MASQUERADE
+```
+Since NAT instance is an EC2 instance so it can use security group while NAT gateway can only use NACLs
+* NAT Gateway doesn't work with IPv6
+
+
+## Create Private Subnet with NAT Gateway
+
+To Create a NAT Gateway in Console UI, you select the public "Web" subnet (sn-web-a) to put NAT Gateway inside the public subnet, NAT Gateway has to be put inside public subnet
+and then assign an Elastic IP to NAT Gateway. Note that NAT Gateway gets an public elastic IP and a private address which is controlled by the route tables which in turn will be looked upon by VPC router
+For the A4L architecture, you need to create 3 NAT Gateway instances along with 3 route tables
+
+```bash
+# VPC CIDR Range 10.16.0.0/16
+##--------------------------------------------------------------------------------------------------V
+#AZ     Db (private)          App (private)      Web (public)
+AZ-A    10.16.16.0/20         10.16.32.0/20      10.16.48.0/20
+             |                     |                    |-----------------------------> VPC Router----------> igw-xxx
+             |------> nat-a <------|                                                    Ʌ  Ʌ  Ʌ
+                       |                                                                |  |  |
+                       |----------------------------------------------------------------|  |  |                                              
+                                                                                           |  |
+AZ-B    10.16.80.0/20     10.16.96.0/20      10.16.112.0/20                                |  |
+             |                     |            |------------------------------------------|  |     
+             |------> nat-b <------|                                                       |  |
+                       |                                                                   |  |
+                       |-------------------------------------------------------------------|  |                                                       |
+AZ-C    10.16.144.0/20    10.16.160.0/20     10.16.176.0/20                                   |
+             |                     |            |---------------------------------------------|
+             |------> nat-c <------|                                                          |
+                       |                                                                      |
+                       |----------------------------------------------------------------------|
+##-------------------------------------------------------------------------------------------------Ʌ
+
+
+#---------------------------------------------------------------------------------V
+# one of three new route table says rt-a created and associated with private subnet e.g sn-web-a:
+
+# Destination              Target
+10.16.0.0/16               local
+0.0.0.0/0                  nat-a
+#---------------------------------------------------------------------------------Ʌ
+
+# then you need to assocate subnets with route table:
+# sn-db-a, sn-app-a with rt-a 
+# sn-db-b, sn-app-b with rt-b
+# sn-db-c, sn-app-c with rt-c
+```
 
 
 ## Network Access Control Lists (NACL)
@@ -140,12 +258,12 @@ so Custom NACLs are **implicit deny** by default
 
 ## Security Group
 
-* Apply on instance level compared to the NACLs which applys on subnet level
+* Apply on instance level (technically ENI level) compared to the NACLs which applys on subnet level
 * Statefull, so allow request = allow response
-* No explicit deny (compared to NACLs which supports explicit deny), only allow or implicit deny
+* No explicit deny (compared to NACLs which supports explicit deny), only **allow** or **implicit deny**
 * Cannot block specific bad IP
 * Support IP/CIDR, logical resource, other security group and itself. When sg is used in Source, it means "any instace in the sg"
-* Attched to Elastic network interfaces (ENI, which is associated with an instance) not instances itself (even if the UI shows it this way)
+* Attched to Elastic network interfaces (ENI, which is associated with an instance) not instances itself (even if the UI shows it this way). Remember an EC2 instance can have one primary private IP (used in the internet gateway) and multiple ENIs (each ENI has one private IP).
 
 ```bash
 # Inbound Rules (1)
@@ -155,11 +273,268 @@ so Custom NACLs are **implicit deny** by default
 
 ```
 
-# EC2
+## EC2
+
+* AZ Reliant: an EC2 is placed in an AZ, if that AZ fails, all EC2 instance in that AZ fails
+* Since EC2 is AZ Reliant, all related network, persistent storage (EBS etc) are per AZ. So if an AZ in AWS experience major issues, it impacts all of those things
+* Restart an EC2 instance, the instance will be on the same host; Stop an EC2 instance and start it (different than restarting) will result the instance in a different host (still in same AZ)
+
+# EC2 Categories
+
+example instance type: `R5dn.8xlarge`:
+`R` is the *Instance Family*, `5` is *Instance Generation*, `8xlarge` is *Instance Size*. `dn` is *Additional Capabilities* (`d` means dense for NVMe, `n` means network optimized )
+
+
+* **General Purpose**: default, diverse workloads, equal resource ratio:
+
+  `A1`, `M6g`: 'A1' (Graviton), 'M6g' (Graviton 2), Graviton is a family of 64-bit ARM-based CPUs designed by AWS
+  `T3`, `T3a`: 'T' means Turbo (Burstable), cheaper assuming low levels of usage, with occasional peaks.
+  `M5`, `M5a`, `M5n`: 'M' Stands for "Main"/ "General Purpose", steady state workload alternative to T3
+
+* **Compute Optimized**: Machine Learning, gaming, scientific modelling:
+
+  `C5`, `C5n`: general machine learning, gaming server
+
+* **Memory Optimized**: large in-memory dataset process and database workloads
+
+  `R5`, `R5a`: real time analytics, in-memory caches, certain DB application (in-memory operation)
+  `X1`, `X1e`: large scale in-memory applications, lowest $ per GB memory in AWS
+
+* **Storage Optimized**: massive IO operations per second, data warehousing, analytics workloads
+
+   `I3`, `I3en`: high performance NVMe
+   `D2`: dense storage (HDD), lowest price disk throughput
+   `H1`: high throughout balance CPU/Memory
+
+* **Accelerated Computing**: Harware GPU, field programmable gate arrays (FPGAs)
+
 
 ```bash
 ssh -i "A4L.pem" ec2-user@ec2-18-234-163-215.compute-1.amazonaws.com
 ```
+
+## Instance Metadata
+
+```bash
+curl http://169.254.169.254/latest/meta-data/
+# ami-id
+# ami-launch-index
+# ami-manifest-path
+# block-device-mapping/
+# events/
+# hostname
+# iam/
+# identity-credentials/
+# instance-action
+# instance-id
+# instance-life-cycle
+# instance-type
+# local-hostname
+# local-ipv4
+# mac
+# managed-ssh-keys/
+# metrics/
+# network/
+# placement/
+# profile
+# public-hostname
+# public-ipv4
+# reservation-id
+# security-groups
+# services/
+```
+
+```bash
+curl http://169.254.169.254/latest/meta-data/public-ipv4
+curl http://169.254.169.254/latest/meta-data/public-hostname
+
+wget http://s3.amazonaws.com/ec2metadata/ec2-metadata  # a tool let you interact with Metadata easier
+chmod u+x ec2-metadata
+
+ec2-metadata --help
+ec2-metadata -v  # same as curl http://169.254.169.254/latest/meta-data/public-ipv4
+ec2-metadata -p  # query public host name
+```
+
+## EC2 Bootstrapping
+
+Only run once on Launch, and you can access user data at `http://169.254.169.254/latest/user-data`
+
+
+## EC2 Instance Role
+
+Create an Instance Role (a normal role) and attach it to an EC2 instance via: -> Security -> Modify IAM Role. Note that when you create a role use Console UI, an **Instance Profile** is created, and when you attach the role to the EC2 instance, you actually attach the instance profile with the EC2 instance, UI makes you think you attach "role" to it but behind the scene it is the instance profile attached to it.
+
+An application on the instance retrieves the security credentials (automatically renewed) provided by the role from the instance metadata:
+
+```js
+// Inside an EC2 instance (AWS's own AMI) that you attach an instance role to it
+
+curl http://169.254.169.254/latest/meta-data/iam/security-credentials/YourInstanceRole
+
+/* this credentials will be automatically renewed when it is about to expiry 
+{
+  "Code" : "Success",
+  "LastUpdated" : "2025-02-16T13:58:09Z",
+  "Type" : "AWS-HMAC",
+  "AccessKeyId" : "xxx...",
+  "SecretAccessKey" : "yyy...",
+  "Token" : "zzz...=",
+  "Expiration" : "2025-02-16T20:32:20Z"
+}
+*/
+```
+
+
+## EC2 Purchase Options
+
+* On-Demand: most common way, bill per sec
+  You can purchase on-demand capacity reservations (minimum commitment is 14 days) to avoid the situation when AWS doesn't have enough readily available compute power to fulfill your request for the chosen instance type, when you reserve capacity for on demand, you are charged by bill er sec and you are still charge when the instance is stopped
+
+* Spot Instance: Bid like Auction, once the price falls to the minimum you set, it starts to run and it can be stopped by aws when the price goes up
+
+* Reserved: get discount for committing to run an instance for 1 up to 3 years, you will be charged even you don't use/start these instances.
+
+* Dedicated Instance: no other AWS Account will run an instance on the same Host, but other instances (both dedicated and non-dedicated) from the same AWS Account might run on the same Host. Just like you're hiring a small laptop. But if you stop/restart that laptop, next time, you're hiring another laptop.
+
+* Dedicated Host: No Per Instance Charge, since you already purchase the whole physical server; used for requirements of licensing based on sockets/cores. Similar to dedicated instance, but guess what, that laptop is yours, forever, as long as you pay the bill. You stop/restart that laptop, next time you still boot on the same laptop. But usually this laptop is huge, and the price is a lot more expensive
+
+
+## Elastic Block Store (EBS) and Instance Store
+
+Ephermeral Storage: `Instance Store`
+Persistent Storage: `EBS`
+
+https://stackoverflow.com/questions/74678898/what-does-ec2-store-and-why-does-it-even-need-a-storage-solution-like-ebs-or-ins
+Think of an Amazon EC2 instance as a normal computer. Inside, there is CPU, RAM and (perhaps) a hard disk.
+
+When an EC2 instance has a hard disk, it is called `Instance Store` and it behaves just like a normal hard disk in a computer. However, when you turn off the instance and stop paying for it, the EC2 instance can give that computer to somebody else. Rather than giving your data to somebody else, **the disk is erased**. So, anything you stored on Instance Store is gone.
+
+If you want to **keep your data** so that it is still there when you turn on the instance in future, it needs to be stored on a network disk and that is what Amazon EBS provides. Think of it a bit like **an USB drive that you can plug into one computer, then disconnect it and plug it into another computer**. However, rather than being a physical device, it uses a storage service that keeps multiple copies of the data (in case a disk fails) and lets you modify the size of the disk. You are charged based on the amount of storage space assigned and how long the data is kept ("GB-Month").
+
+
+**Instance Store** volumns are physically attached to EC2 host (offer highest-performance compare to network based gp2 etc), and they are non-persistent so if you stopped, hibernated, or terminated your EC2 instance, the instance store data is gone (reboot is fine). **Instance Store can only be attached at launch time (exam question)** while other EBS can be attached after EC2 instance is created
+
+**EBS** volume is attached over network, not within EC2 host. EBS volumn still persist when the EC2 instance get terminated. An EBS volumn can only be attached to **only one EC2 instance at a time**.
+
+Every EC2 instance has a root EBS volumn (to store operating systmes) created when the EC2 instance is created. Note that root volumn will be deleted when you delete the corresponding EC2 instance but any addtional volumns you attach to the instance will still be available
+
+**Note that An EBS volumn can only be assigned to EC2 instances which are in the same AZ**, you have to use snapshot feature to copy an EBS volume to another EC2 instance in a different AZ or region
+
+There are 3 main category of EBS:
+
+* **General Purpose SSD volumes**: `gp2` (default for boot volumn), `gp3`, which is "credit allocated" storage, all volumes get an inital 5.4 million IO credit (a credit can do IO operation 16kb/s), which can run 30 mins at 3000 IOPS (one IOP is 16kb in one second which is the block size). Note that buckets get refilled with minimum 100 IO Credits per second regardless of volume size, and every volumn get refills with 3 IO credits per second, so a 100Gb volumn 300 credits per sec (which is called baselne rate, which is 3 times the GB size of the volumn), so you can see that if you have a very large e.g 1TB, the volumn won't run out with credits, so it always achieve baseline performance (credits comsumed is roughly the same as credits refilled), but volumn is not limited to run below baseline rate, **gp2** can take up to maximum **16,000 IO credits per second**
+
+`gp3` (which will be default soon) is cheaper than `gp2` and 4x fastern max throughput vs `gp2`- 1,000MB/s VS 250 MB/s, gp3 removes the credit architecture, gp3 is standardise to 3000 IOPS regarding of volumn size 
+
+* **Provisioned IOPS SSD Volumes** (highest performance EBS and support multi-attach): `io1`, `io2`, IOPS can be adjusted independently of size, up to 64,000 IOPS per volume (4 x GP2/3), up to 1000MB/s throughput, great for database workload. And `BlockExpress` takes it to next level by 4x. There is still maximum size to performance ratio: `io1`: 50 OPS/GB, `io2`: 500 OPS/GB, `BlockExpress`: 1000 OPS/GB, note that these maximum value mutiple by GB size is capped by the 64,000 IOPS per volume. If you want a small volume but have high performance, io1 and io2 is the way to go.
+
+note that multi-attach can attach a EBS volume to multiple EC2 instances (maximum 16 EC2 instances) in the **same AZ**
+
+* **Hard disk drive (HDD) volumes**: `st1`, `sc1` (Cold HDD volumes, cheaper), HDD cannot be used as boot volumes, they are not good for random access but good for large sequential data. st1 supports maximum 500 IOPS (500MB/s, one IOP is 1MB in HDD not 16KB like SSD), and it has similar credit architecture like gp2. sc1 (lowest price of all EBS option) supports maximum 250 IOPS
+
+
+## EBS Snapshots
+
+We can copy an EC2's EBS volume and restore it into another EC2 instance (in different AZ or region)'s new volume. Snapshot restore lazily, which means you have to use some admin tool to force a read of all data before using it in Production otherwise, IO operation will be "async await" and takes some time to read data for users. 
+**Fast Snapshot Restore (FSR)** allows you to immediate restore like force read in every block of the new volumn, which can save you overhead of using admin tool
+ 
+
+## EBS Encryption
+
+* Each volumnuses 1 unique DEK, snapshots and future restored volume uses the same DEK but if you create another volume, you will be using a different DEK
+
+
+## Create Custmized AMI
+
+AMI itself doesn't store EBS volume, it reference Snapshots which are stored in Amazon S3, in S3 buckets that you can't access directly.  
+
+## Attach EBS to EC2 Practice
+
+```bash
+#1
+$ lsblk
+NAME      MAJ:MIN RM SIZE RO TYPE MOUNTPOINTS
+xvda      202:0    0   8G  0 disk 
+├─xvda1   202:1    0   8G  0 part /
+├─xvda127 259:0    0   1M  0 part 
+└─xvda128 259:1    0  10M  0 part /boot/efi
+xvdf      202:80   0  10G  0 disk    ## <-----------------------the new volumn attached to an EC2 instance
+
+#2
+$ sudo file -s /dev/xvdf
+/dev/xvdf: data   ## <------------"data" mean there isn't any file system on this block device, you can only mount file systems on Linux so we need to create a FS on top of it
+
+#3
+$ sudo mkfs -t xfs /dev/xvdf
+meta-data=/dev/xvdf              isize=512    agcount=4, agsize=655360 blks
+         =                       sectsz=512   attr=2, projid32bit=1
+         =                       crc=1        finobt=1, sparse=1, rmapbt=0
+         =                       reflink=1    bigtime=1 inobtcount=1
+data     =                       bsize=4096   blocks=2621440, imaxpct=25
+         =                       sunit=0      swidth=0 blks
+naming   =version 2              bsize=4096   ascii-ci=0, ftype=1
+log      =internal log           bsize=4096   blocks=16384, version=2
+         =                       sectsz=512   sunit=0 blks, lazy-count=1
+realtime =none                   extsz=4096   blocks=0, rtextents=0
+
+#4
+$ sudo file -s /dev/xvdf
+/dev/xvdf: SGI XFS filesystem data (blksz 4096, inosz 512, v2 dirs)
+
+$ sudo mkdir /ebstest
+$ sudo mount /dev/xvdf /ebstest  ## <------------------------------
+
+#5
+$ df -k
+Filesystem     1K-blocks    Used Available Use% Mounted on
+devtmpfs            4096       0      4096   0% /dev
+tmpfs             486128       0    486128   0% /dev/shm
+tmpfs             194452     444    194008   1% /run
+/dev/xvda1       8310764 1627904   6682860  20% /
+tmpfs             486132       0    486132   0% /tmp
+/dev/xvda128       10202    1310      8892  13% /boot/efi
+tmpfs              97224       0     97224   0% /run/user/1000
+/dev/xvdf       10420224  105704  10314520   2% /ebstest  ## <-------------------------------
+
+#6
+$ sudo reboot  # restart the instance and if we connect to the same EC2 instance again we cann't see the file system associated with EBS volume when run `df -k`
+# because by default EBS volume are not automatically mounted (EBS volume is still automatically attached to the EC2 instance)
+
+#7
+$ sudo blkid  # select the unique volumn id 9657018b-98fd-438d-ae98-e1fe0c01544e, /dev/xvda1 is the boot volume
+/dev/xvda128: SEC_TYPE="msdos" UUID="1883-E9E2" BLOCK_SIZE="512" TYPE="vfat" PARTLABEL="EFI System Partition" PARTUUID="f39eccca-429b-4ad0-8537-7e3b00bace36"
+/dev/xvda127: PARTLABEL="BIOS Boot Partition" PARTUUID="c8dfb03e-f4d6-4010-9e9a-141a2e5596ed"
+/dev/xvda1: LABEL="/" UUID="9d0c119b-7697-47bd-99a8-48ecf6e02f0d" BLOCK_SIZE="4096" TYPE="xfs" PARTLABEL="Linux" PARTUUID="55732cf4-e5b5-4052-9572-ad256392a887"
+/dev/xvdf: UUID="9657018b-98fd-438d-ae98-e1fe0c01544e" BLOCK_SIZE="512" TYPE="xfs"
+
+#8
+$ sudo nano /etc/fstab  # an a new entry that contains the unique UUID above, fstab means "file system table"
+
+#9
+$ sudo mount -a   # mount all File Systems in the fs table
+```
+
+
+## EFS ( Elastic File System)
+
+EFS is a managed NFS (Network File System) and it can be attached to multiple EC2 instances in **multiple AZs** (like a network shared drive), while EBS can only be attached to one EC2 instance (there is only one version io1 supports multi-attach), and EBS needs to be in the same AZ as the EC2 instance.
+
+There are 3 main category of EFS:
+
+* EFS Standard
+* EFS Infrequent Access
+* EFS Archive
+
+When an EFS is created, a DNS name (e.g fs-0f435408205fb6916.efs.us-east-1.amazonaws.com) is created and and if this file system is attached to an EC2 instance, two security groups are created:
+
+1.  `instance-sg-1` attched to the EC2 instance (allow NFS on port 2049 as outbound rules) 
+2.  `efs-sg-1` attached to the EFS (allow NFS on port 2049 as inbound rules), yes EFS can contain security group
+
+```yml
+sudo mount -t efs -o tls fs-0f435408205fb6916.efs.us-east-1.amazonaws.com:/ ~/efs-mount-point
+```
+
 
 
 # S3
@@ -217,7 +592,7 @@ so you could have all 5,000 users in a single user group
 * There is no nesting in group (group within group) and groups (just a container for users only, that's it) are not a true identity so they can't be referenced as a principal in a policy
 
 
-IAM role contains two kinds of polilcies: 
+IAM role contains two kinds of polilcies: **Trust policy**: Who can assume the IAM role ; **Permission policy**: What does the role allow once you assume it
 
 **Trust Policy** (control who can assume the role), below is a trust policy, only trust policy has "Principal" section and the "Action" has to be "sts:AssumeRole"
 
@@ -300,7 +675,7 @@ Root
    
 ```
 
-When you create an new aws account in a organization, `OrganizationAccountAccessRole` (OAAR) that has admin rights in that account is automatically created, if you invite an existing aws account (note that you will be using management account to send invitation to the account) to join the organization, then you have to manually create the role so that management account can assume it. Management account doesn't have any role such as OAAR being created.
+When you create an new aws account in using AWS Organization, `OrganizationAccountAccessRole` (OAAR) that has admin rights in that account is automatically created, if you invite an existing aws account (note that you will be using management account to send invitation to the account) to join the organization, then you have to manually create the role so that management account can assume it. Management account doesn't have any role such as OAAR being created.
 
 When you assume an account's OAAR, it is like you login in to the account manually.
 
@@ -347,6 +722,14 @@ remember when you switch to PROD from management account, you are assuming the `
 
 ## CloudWatch Logs
 
+`Namespace`  :  container for metric e.g `AWS/EC2` & `AWS/Lambda`, `AWS` prefix is for namespace created by AWS
+`Datapoint`  :  Every datapoint has a Timestamp, Value and (optional) an unit of measure, e.g EBS IOPS, a datapoint is : { TimeStamp: "20240110T09:27:33", Value: 1000, unit: "count"}
+`Metric`     :  time ordered set of data points, e.g EC2's `CPUUtilization`, `DiskWriteBytes`
+`Dimension`  :  name/value pair e.g `Name=InstanceId, Value=xxxx` to differentiates between instances, e.g instanceA's `CPUUtilization` VS instanceB's `CPUUtilization`
+                AWS adds extra dimension e.g `ImageId`, `InstaceType`, `AutoScalingGroupName` for built-in metric `CPUUtilization`
+`Resolution` :  granularity, standard is 60s granularity, high is 1s
+`Retension`  :  for a given Resolution, AWS stores them differently. Less than 1min granularity, data is retained for 3hours; 1min for 15 days; 5mins for 63 days, 1hour for 455 days
+
 A **Log Stream** is a series log events from the **same source/instance**, a **Log Group** consists multiple Log Stream
 
 
@@ -381,13 +764,9 @@ A **Log Stream** is a series log events from the **same source/instance**, a **L
 
 
 
+## end of learn cantrill
 
-
-
-
-
-
-=========================================================================================================================================================================================
+===================================================================================================================================================== 
 
 AWS operates 24 **Regions** around the world, each region is composed of at least two, usually three **Availability Zones** (AZ). Each AZ is composed of one or more physically separated data centers. 
 
@@ -805,7 +1184,7 @@ For Fargate: each task gets a unique private ip adddress, there is no host port 
 
 Image current user Paul doesn't have permission to create an EC2 instance but the senior developer still assign a CloudFormation template for him to execute. That's how "Service Role" comes into play when Paul is createing a stack he can specify a service role for CloudFormation to perform tasks. Below is the steps:
 
-1. Create a **service role** e.g  **CloudFormationServiceRole** that specify CloudFormation has permission to create EC2 instance. Its trust entity is like:
+1. Creates a **service role** e.g **CloudFormationServiceRole** that specify CloudFormation has permission to create EC2 instance. Its trust entity is like:
 
 ```json
 {
@@ -815,7 +1194,7 @@ Image current user Paul doesn't have permission to create an EC2 instance but th
         "Sid": "",
         "Effect": "Allow",
         "Principal": {
-            "Service": "cloudformation.amazonaws.com"
+            "Service": "cloudformation.amazonaws.com"   // <-----------"Service" under "Principal" means it is a service role
         },
         "Action": "sts:AssumeRole"
     }
@@ -823,10 +1202,10 @@ Image current user Paul doesn't have permission to create an EC2 instance but th
 }
 ```
 
-then attach e.g "AmazonEC2FullAccess" permission
+then attach e.g `AmazonEC2FullAccess` permission
 
 
-2. Create a **user role** where you specify a trust policy that Paul can assume rule
+2. The senior developer creates a **user role** where you specify a trust policy that Paul can assume rule
 
  ```json
  {
@@ -842,7 +1221,7 @@ then attach e.g "AmazonEC2FullAccess" permission
   ]
 }
 ```
- * a permission that is attached to the user role above
+below is a permission that is attached to the user role above
 
  ```json
  {
