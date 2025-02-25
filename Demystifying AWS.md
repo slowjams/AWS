@@ -548,6 +548,122 @@ sudo mount -t efs -o tls fs-0f435408205fb6916.efs.us-east-1.amazonaws.com:/ ~/ef
 ```
 
 
+## Elastic Load Balancers (ELB)
+
+* ~~Class Load Balance (CLB)~~: 1 SSL per CLB, lacking features etc, do not use
+* Application Load Balancer (`ALB`): HTTP, HTTPS, WebSocket
+* Network Load Balacner (`NLB`): TCP, UDP, TLS
+
+
+learn dns first
+```
+                SubnetA1                                            SunbetA2             
+                                                                                                
+        ┌──────────────────────────────────┐                  ┌────────────────────────────────┐
+        │                                  │                  │                                │
+        │                                  │                  │                                │
+        │                                  │                  │                                │
+        │                                  │                  │                                │
+AZ-A    │                                  │                  │                                │
+        │                                  │                  │                                │
+        │                                  │                  │                                │
+        │                                  │                  │                                │
+        │                                  │                  │                                │
+        │                                  │                  │                                │
+        │                                  │                  │                                │
+        └───────────────▲──────────────────┘                  └────────────────────────────────┘
+                        │                                                                       
+                        │                                                                       
+                        │                                                                       
+                        │                                                                       
+                        │                                                                       
+                        │                                                                       
+                        │                                                                       
+                        │                                                                       
+                        │                                                                       
+                   ┌────┼────┐                                                                  
+                   │         │                                                                  
+           ELB1    │         │                                                                  
+                   │         │                                                                  
+                   └─────────┘                                                                     
+```
+
+
+## Route53
+
+`DNS Zone`     : a database, for example  *.netflix.com (that's the zone) containing records
+`ZoneFile`     : the "file" storing the zone on disk
+`Name Server`  : a DNS server which hosts 1 or more Zones by storing 1 or more ZoneFiles
+`Authoritative`: contains real/genuine record (boss)
+`Non-Authoritative`/ `Cached`: copies of records/zones that saved as cached e.g. you internet provider or router can be this category as you have vistied some sites before
+
+
+Q: Why not let TLD such .com NS providing IP address directly, why it delegate the job to Authoritative servers?
+
+A: Separating out the Authoritative servers from the TLD servers allows the owner of an individual domain to make changes to their domain's records without having to involve the TLD maintainers in any way. Say that we own `example.com`, which has an authoritative server at `ns.example.com`, and we want to set up a new subdomain at `blog.example.com`. Since we maintain our own authoritative server, all we have to do to set up the blog subdomain is add a new A record to our authoritative server.
+
+
+DNS records:
+
+┌─────────┬─────────────────┬─────────────────┬────────┐                  ┌─────────┬─────────────────┬─────────────────┬────────┐
+│  Type   │      Name       │   IP Address    │   TTL  │                  │  Type   │      Name       │   IP Address    │   TTL  │
+├─────────┼─────────────────┼─────────────────┼────────┤                  ├─────────┼─────────────────┼─────────────────┼────────┤
+│   A     │   example.com   │   12.34.56.78   │  7200  │                  │  AAAA   │   example.com   │    ipv6 ip      │  7200  │
+└─────────┴─────────────────┴─────────────────┴────────┘                  └─────────┴─────────────────┴─────────────────┴────────┘
+
+
+┌─────────┬─────────────────┬─────────────────┬────────┐                  ┌─────────┬─────────────────┬─────────────────┬────────┐
+│  Type   │      Name       │    Alias To     │   TTL  │                  │  Type   │      Name       │    Alias To     │   TTL  │
+├─────────┼─────────────────┼─────────────────┼────────┤                  ├─────────┼─────────────────┼─────────────────┼────────┤
+│  CNAME  │ www.example.com │   example.com   │  7200  │                  │  ALIAS  │    example.com  │    example.net  │  7200  │
+├─────────┼─────────────────┼─────────────────┼────────┤                  └─────────┴─────────────────┴─────────────────┴────────┘
+│  CNAME  │ ftp.example.com │   example.com   │  7200  │
+├─────────┼─────────────────┼─────────────────┼────────┤                  both CNAME and ALIAS records are stored in Authoritative NS, not TLD
+│  CNAME  │ www.example.com │ lb.example.net  │  7200  │
+└─────────┴─────────────────┴─────────────────┴────────┘
+
+┌─────────┬─────────────────┬──────────────────┬────────┐                  
+│  Type   │      Name       │      Value       │   TTL  │                
+├─────────┼─────────────────┼──────────────────┼────────┤                 
+│   NS    │   example.com   │ dns1.example.com │  7200  │                
+├─────────┼─────────────────┼──────────────────┼────────┤   
+│   NS    │   example.com   │ dns2.example.com │  7200  │                
+└─────────┴─────────────────┴──────────────────┴────────┘              
+
+
+
+                        Root NS                                                  
+                        ┌─────┐                                                  
+                        │     │                                                  
+                        │     │                                                  
+                        │     │──────────────┐                                   
+                        │     │              │                                   
+                        │     ◄───────────┐  │    TLD DNS Server                 
+                        │     │         ┌─┼──▼──────────────────────────────────┐
+  Local DNS Server      └▲────┘         │  (NS,example.com, dns1.example.com)   │   both NS and A records are returned to the local DNS Server
+      ┌──────┐           │              │  (A,dns1.example.com, 212.212.212.1)  │
+      │      │           │              └───▲───────────────────────────────────┘
+      │      │◄──────────┘                  │
+      │      │                              │                                    
+      │      │◄─────────────────────────────┘                                    
+      │      │                                                                   
+      │      │◄────────────┐                                                     
+      └───▲──┘             │                                                     
+          │                │ Authoritative DNS Server (IP Addr: 212.212.212.1)   
+          │               ┌▼────────────────────────────────────────────────────┐
+    Host  │               │ (CNAME, Name: www.example.com, Alias: example.com)  │
+┌────────────┐            │ (CNAME, Name: ftp.example.com, Alias: example.com)  │
+│            │            │ (A, example.com, 12.34.56.78)                       │
+│            │            └─────────────────────────────────────────────────────┘
+└────────────┘            
+
+
+`CNAME` is __invalid__ for naked/apex domains.  An **apex** domain is a custom domain that does not contain a subdomain, such as `example.com`, `blogs.example.com` is not apex domain
+`ALIAS` can be used for both apex and non-apex domains and it is implemented by AWS and outside of the usual DNS standard.
+check https://www.ibm.com/think/topics/alias-vs-cname for more details such as how ALias records can delegte the second query to Authoritative NS
+
+
+
 
 # S3
 
