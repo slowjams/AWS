@@ -377,7 +377,7 @@ Only run once on Launch, and you can access user data at `http://169.254.169.254
 
 Create an Instance Role (a normal role) and attach it to an EC2 instance via: -> Security -> Modify IAM Role. Note that when you create a role use Console UI, an **Instance Profile** is created, and when you attach the role to the EC2 instance, you actually attach the instance profile with the EC2 instance, UI makes you think you attach "role" to it but behind the scene it is the instance profile attached to it.
 
-An application on the instance retrieves the security credentials (automatically renewed) provided by the role from the instance metadata:
+An application on the instance **retrieves the security credentials (automatically renewed) provided by the role from the instance metadata**:
 
 ```js
 // Inside an EC2 instance (AWS's own AMI) that you attach an instance role to it
@@ -632,38 +632,83 @@ DNS records:
 
 
 
-                        Root NS                                                  
+                        Root NS : 13 servers gloabally                                                   
                         ┌─────┐                                                  
                         │     │                                                  
-                        │     │                                                  
-                        │     │──────────────┐                                   
-                        │     │              │                                   
-                        │     ◄───────────┐  │    TLD DNS Server                 
-                        │     │         ┌─┼──▼──────────────────────────────────┐
-  Local DNS Server      └▲────┘         │  (NS,example.com, dns1.example.com)   │   both NS and A records are returned to the local DNS Server
-      ┌──────┐           │              │  (A,dns1.example.com, 212.212.212.1)  │
+                        │     ◄──────────────┐                                   
+                        │     │              │  TLD DNS Server : around 1500 server globally                
+                        │     │         ┌────▼──────────────────────────────────┐
+                        │     │         │  (NS, example.com, dns1.example.com)  │   In DNS there are always two authoritative servers (NS records) for resilience
+                        │     │         │  (NS, example.com, dns2.example.com)  │
+  Local DNS Server      └▲────┘         │  (A, ns1.example.com, 212.212.212.1)  │
+      ┌──────┐           │              │  (A, ns2.example.com, 212.212.212.2)  │
       │      │           │              └───▲───────────────────────────────────┘
       │      │◄──────────┘                  │
       │      │                              │                                    
-      │      │◄─────────────────────────────┘                                    
+      │      │◄─────────────────────────────┘  both NS and A records are returned to the local DNS Server, such record pairs are called glue records                               
       │      │                                                                   
       │      │◄────────────┐                                                     
-      └───▲──┘             │                                                     
-          │                │ Authoritative DNS Server (IP Addr: 212.212.212.1)   
+      └───▲──┘             │      primary Authoritative DNS Server                  secondary Authoritative DNS Server (ns2.example.com) contains the same                           
+          │                │  (ns1.example.com; IP Addr: 212.212.212.1)             zone file via "Zone transfer" which SOA is involved in this process
           │               ┌▼────────────────────────────────────────────────────┐
-    Host  │               │ (CNAME, Name: www.example.com, Alias: example.com)  │
-┌────────────┐            │ (CNAME, Name: ftp.example.com, Alias: example.com)  │
+    Host  │               │ (SOA, ns1.example.com, admin.example.com, ...)      │  Start of Authority (SOA) specify the primary authoritative server,
+┌────────────┐            │ (CNAME, Name: www.example.com, Alias: example.com)  │
+│            │            │ (CNAME, Name: ftp.example.com, Alias: example.com)  │
 │            │            │ (A, example.com, 12.34.56.78)                       │
-│            │            └─────────────────────────────────────────────────────┘
-└────────────┘            
+└────────────┘            └─────────────────────────────────────────────────────┘
 
 
-`CNAME` is __invalid__ for naked/apex domains.  An **apex** domain is a custom domain that does not contain a subdomain, such as `example.com`, `blogs.example.com` is not apex domain
+**`CNAME` is invalid for naked/apex domains**.  An **apex** domain is a custom domain that does not contain a subdomain, such as `example.com`, `blogs.example.com` is not apex domain
 `ALIAS` can be used for both apex and non-apex domains and it is implemented by AWS and outside of the usual DNS standard.
 check https://www.ibm.com/think/topics/alias-vs-cname for more details such as how ALias records can delegte the second query to Authoritative NS
 
+A Secondary Authoritative Server learns about the existence of a primary authoritative server through configuration settings within the DNS zone file, specifically the **Start of Authority** (SOA) record:
+
+┌─────────┬───────────────────┬───────────────────┬─────────────┬─────────┬────────┐                 
+│  Type   │      MNAME        │      RNAME        │   SERIAL #  │  RETRY  │   TTL  │          
+├─────────┼───────────────────┼───────────────────┼─────────────┼─────────┼────────│            
+│  SOA    │  ns1.example.com  │ admin.example.com │   510025    │   60    │  7200  │   
+└─────────┴───────────────────┴───────────────────┴─────────────┘─────────┴────────┘
 
 
+## Route53 Routing Type - Simple Routing
+
+**Simple Routing**: supports one `A ` Record per name, each record can have multiple IP values e.g. `1.2.3.3, 1.2.3,4, 1.2.3,5`, all those IP addresses are returned in a **random** order to client who chooses one from it. Simple Routing **doesn't support health check.**
+
+
+## Route53 Routing Type - Multi Value Routing and Weighted Routing
+
+pretty straightforward, and these two types supports health checks, so if a record is unhealthy, then this record won't be returned to the client
+
+
+## Route53 Health Checks
+
+Health checkers located globally. and they checks every 30s (every 10 costs extral) to `Endpoint`, `Calculated health check`, `CloudWatch alarm`.
+There are multiple health checkers globally, if 18% plus of health checkers report (extral loads on your application?) as healthy then the health check is healthy, and unhealthy record is not returned in queries
+
+
+## Route53 Routing Type - Failover Routing
+
+* Create an EC2 instnace and S3 Static Website
+* Create an Elastic IP address (eip), note that this IP address is not used to assoicate with EC2 instance 
+* Create a Route53 Health Check (a Health check Id, says "hcId" will be created and to be used later) with IP address to be eip
+* Go to Hosted Zone section -> Create a record (and Choose routing policy to be "Failover")
+  inside Create record section, create a `A` record (A, www.animals4file.org, eip) via "Define failover record" section where you specify eip as "primary" in *Failover record type* (strange, you have to define primary authoritative server in "failover" section?), and enter the Health check Id "hcId" for "Health Check Id - optional". follow a similar process to enter s3 static website endpoint as "Secondary" in *Failover record type* and you don't specify the hcId for this secondary thing, that's why the title says "- optional"
+* Click *Create records* and the following records will be created:
+
+```
+┌───────────────────────┬──────┬───────────┬──────────────────────────┐               
+│  Record name          │ Type │  Routing  │  Value/Route traffic to  │    
+├───────────────────────┼──────┼───────────┼──────────────────────────│           
+│ animals4life.org      │  NS  │  Simple   │ ns-396.awsdns-49.com, ...│   
+├───────────────────────┼──────┼───────────┼──────────────────────────│           
+│ animals4life.org      │ SOA  │  Simple   │ ns-396.awsdns-49.com, ...│   
+├───────────────────────┼──────┼───────────┼──────────────────────────│   
+│ www.animals4life.org  │  A   │  Failover │    3.231.178.158,        │   Primary
+├───────────────────────┼──────┼───────────┼──────────────────────────│   
+│ www.animals4life.org  │  A   │  Failover │ s3-webXXX.amazonaws.com  │   Secondary
+└───────────────────────┴──────┴───────────┴──────────────────────────┘
+```
 
 # S3
 
