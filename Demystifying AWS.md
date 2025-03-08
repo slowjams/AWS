@@ -555,38 +555,66 @@ sudo mount -t efs -o tls fs-0f435408205fb6916.efs.us-east-1.amazonaws.com:/ ~/ef
 * Network Load Balacner (`NLB`): TCP, UDP, TLS
 
 
-learn dns first
-```
-                SubnetA1                                            SunbetA2             
-                                                                                                
-        ┌──────────────────────────────────┐                  ┌────────────────────────────────┐
-        │                                  │                  │                                │
-        │                                  │                  │                                │
-        │                                  │                  │                                │
-        │                                  │                  │                                │
-AZ-A    │                                  │                  │                                │
-        │                                  │                  │                                │
-        │                                  │                  │                                │
-        │                                  │                  │                                │
-        │                                  │                  │                                │
-        │                                  │                  │                                │
-        │                                  │                  │                                │
-        └───────────────▲──────────────────┘                  └────────────────────────────────┘
-                        │                                                                       
-                        │                                                                       
-                        │                                                                       
-                        │                                                                       
-                        │                                                                       
-                        │                                                                       
-                        │                                                                       
-                        │                                                                       
-                        │                                                                       
-                   ┌────┼────┐                                                                  
-                   │         │                                                                  
-           ELB1    │         │                                                                  
-                   │         │                                                                  
-                   └─────────┘                                                                     
-```
+When a ELB is deployed into AZs, nodes are created and attached to those AZs, what you see it is an single ELB instance but behind the scene it consists of multiple ELB nodes,  it is configured with an `A` record that resolves to the multiple ELB nodes. So the workflow is like: 
+
+
+                                                                            ┌─────────────────┐         
+                                                                            │                 │         
+                                                                            │ ┌───┐           │◄───────┐
+                                                                        ┌───│─│   │ ELBNodeA  │  AZA   │
+                                                                        │   │ └───┘           │        │
+                                                                        │   │                 │        │
+   1. get elb's hostname                                                │   └─────────────────┘        │
+user ──────────────────> ELB (created multiple nodes and `A` record)─┬──┤   ┌─────────────────┐        │
+ │ ▲                                                                 │  │   │ ┌───┐           │◄───────┤
+ │ │     2. ELB evenly return an ELB Node's IP to client             │  └───│─┤   │ ELBNodeB  │        │
+ │ └─────────────────────────────────────────────────────────────────┘      │ └───┘           │  AZB   │
+ │                                                                          │                 │        │
+ │                                                                          └─────────────────┘        │
+ │       3.  user sends request to the assigned node's IP address,                                     │
+ │       the node furthen evenly distribute the load to registered group                               │                                          
+ └─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Prerequiste: TLS is mainly function at layer 4, but to signal which cert the server should show, you need SNI. And this has similar information like the Host header in HTTP (Layer 7)so it's all layers 4 to 7. 
+
+Note that behind the scene, there are two connections, connectionA (initiated by client) between client and the ALB node, connectionB (initiated by LB) between LB and chosen server, connectionA remains open until LB finishes the forwarding reponse to the client. You might also heard "TLS termination", in the context of TLS, "termination" refers to the process of decrypting encrypted traffic, essentially ending the secure connection at a load balancer before forwarding the decrypted data to the backend server, effectively "offloading" the decryption task from the web server itself; meaning the SSL connection is terminated at that point and the data is sent unencrypted to the backend server, "termination" doesn't mean LB close client connection between client and LB such as connectionA.
+
+The number of nodes can scale according to the load as ELB will scale automatically by adding either more nodes (scale out) or larger nodes (scale up) to handle the incoming requests. An ELB can be **internet facing** (both public and private ip address are assigned to the nodes) or **internal** (only private ip address are assigned).
+
+Load Balancers (Nodes) are configured with **listeners** which accepts traffic on a port, protocol and communicate with targets (registered with this listerner) on the port and portocol. Note that an interface-facing load balacner/node can connect to both public and private EC2 instance, it doesn't matter whether the EC2 instance is public or private, as long as the load balancer node can communicate with the EC2 instance even it is in private.
+
+ELB supports **Cross-Zone** LB, originally this feature is off by default, so if you have an ELB connects to 2 AZ - AZA (4 EC2 instances connected to ELBNA) and AZB (1 EC2 instance connected to ELBNB), then the one in AZB gets 50% of the load and each instance in AZA gets 12.5%. When this feature is on (by default it is on for ALB), then both ELB Node can communicate to the instance in different AZ, e.g. ELBNB can connect to all 4 instances in AZA, eventually each instance of five gets 12.5% of the load (The exam might ask you to solve an uneven distribution of load).
+
+
+## Application Load Balancer
+
+* Layer 7 LB
+
+* application server don't see the IP of the client directly, the IP of client is inserted in the header `X-Forwarded-For`, and server also get `X-Forwarded-Port` and `X-Forwarded-Proto`
+
+* ALB cannot have one static IP per AZ, unlike NLB, each ALB node's IP address are dynamic and can change depending on scaling
+
+* Cross-Zone LB enabled by default, no extra charge
+
+* registered target always see ALB's IP address as source address, not client's IP address. If the target e.g. EC2 instance want to know the original source IP address, then it need to check the HTTP headers  `X-Forwarded-For`
+
+
+## Network Load Balancer
+
+* The NLB can be deployed to multi-AZ and each NLB node can get a static IP address (helpful for whitelisting specific IP). The exam can ask you "Your application can only be accessed by one or two IP" then you need to choose NLB
+
+* High performance, ultra-low latency and much much faster than ALB
+
+* Cross-Zone LB disabled by default, no extra charge
+
+* Since NLB are layer 4 LB, it is not suuposed to do TLS termination and supposed to do TLS passthrough which let the underlying target server to do the whole TLS process, but AWS
+introduces TLS Termination for Network Load Balancers at 2019 https://aws.amazon.com/blogs/aws/new-tls-termination-for-network-load-balancers/
+
+You may have noticed that headers like `X-Forwarded-For` are HTTP headers, and so can only be added/modified by L7/HTTP proxies or load balancers. If you use a pure TCP load balancer, you'll lose the information about the source of the traffic coming in to you. This is particularly a problem when forwarding HTTPS connections where you don’t want to offload your TLS termination (perhaps traffic is going via an untrusted 3rd party) but you still want information about the client. To that end, the developers of HAProxy developed the PROXY protocol which works by adding a `PPv2` header that contains the client's IP address at the beginning of a TCP connection.
+
+* registered target can see client's IP address when you enable "client IP preservation" feature on the NLB configuration, which uses PROXY protocol mentioned above
+
+* If you specify targets using an instance ID, the source IP addresses of the clients are preserved (no need to enable "client IP preservation" as this functionality is already active by default in this scenario) and provided to your applications. If you specify targets by IP address, the source IP addresses are the private IP addresses of the load balancer nodes because the NLB doesn't inherently know which specific instance owns that IP, as multiple instances could potentially share the same IP address across different network interfaces on a single machine
 
 
 ## Route53
@@ -656,7 +684,7 @@ DNS records:
 │            │            │ (CNAME, Name: ftp.example.com, Alias: example.com)  │
 │            │            │ (A, example.com, 12.34.56.78)                       │
 └────────────┘            └─────────────────────────────────────────────────────┘
-
+                           above records are stored as a zone file called "example.com" and SOA is the first record in the zone file
 
 **`CNAME` is invalid for naked/apex domains**.  An **apex** domain is a custom domain that does not contain a subdomain, such as `example.com`, `blogs.example.com` is not apex domain
 `ALIAS` can be used for both apex and non-apex domains and it is implemented by AWS and outside of the usual DNS standard.
@@ -673,17 +701,28 @@ A Secondary Authoritative Server learns about the existence of a primary authori
 
 ## Route53 Routing Type - Simple Routing
 
-**Simple Routing**: supports one `A ` Record per name, each record can have multiple IP values e.g. `1.2.3.3, 1.2.3,4, 1.2.3,5`, all those IP addresses are returned in a **random** order to client who chooses one from it. Simple Routing **doesn't support health check.**
+**Simple Routing**: supports one `A ` Record per name, a record can have multiple IP values e.g. `1.2.3.3, 1.2.3,4, 1.2.3,5`, all those IP addresses are returned in a **random** order to client who chooses one from it. Simple Routing **doesn't support health check.**
 
 
 ## Route53 Routing Type - Multi Value Routing and Weighted Routing
 
-pretty straightforward, and these two types supports health checks, so if a record is unhealthy, then this record won't be returned to the client
+pretty straightforward, multiple A records as  `(A, www.example.com, 1.2.3.3)`, `(A, www.example.com, 1.2.3.4)`, `(A, www.example.com, 1.2.3.5)` against one record with multiple IP address as Simple Routing above.
+
+These two types supports health checks, so if a record is unhealthy, then this record won't be returned to the client
+
+
+## Route53 Routing Type - Geolocation Routing and Geoproximity Routing
+
+Background: A TLD server can return an authorization server based on a user's location by utilizing "DNS policies" which analyze the client's IP address to determine their geographic location, then provide the IP address of the closest or most appropriate server based on that location, effectively directing the user to a geographically relevant server when they make a request. 
+
+**Geolocation Routing**: you can tag a record with state, country, continent, and optionally default or "No Answer". Note that if you have a record tags with NSW while no record for country, a Melbourne user will get "No Answer", even though Melbourne is Geolocation closed to NSW, if you want a Geoproximity records to be returned then you have to use the routing below.
+
+**Geoproximity Routing**: pretty straightforawd and plus a "bias" 
 
 
 ## Route53 Health Checks
 
-Health checkers located globally. and they checks every 30s (every 10 costs extral) to `Endpoint`, `Calculated health check`, `CloudWatch alarm`.
+Health checkers located globally. and they checks every 30s (every 10 costs extra) to `Endpoint`, `Calculated health check`, `CloudWatch alarm`.
 There are multiple health checkers globally, if 18% plus of health checkers report (extral loads on your application?) as healthy then the health check is healthy, and unhealthy record is not returned in queries
 
 
@@ -700,7 +739,7 @@ There are multiple health checkers globally, if 18% plus of health checkers repo
 ┌───────────────────────┬──────┬───────────┬──────────────────────────┐               
 │  Record name          │ Type │  Routing  │  Value/Route traffic to  │    
 ├───────────────────────┼──────┼───────────┼──────────────────────────│           
-│ animals4life.org      │  NS  │  Simple   │ ns-396.awsdns-49.com, ...│   
+│ animals4life.org      │  NS  │  Simple   │ ns-396.awsdns-49.com, ...│   R53 allocates 4 authoritative servers
 ├───────────────────────┼──────┼───────────┼──────────────────────────│           
 │ animals4life.org      │ SOA  │  Simple   │ ns-396.awsdns-49.com, ...│   
 ├───────────────────────┼──────┼───────────┼──────────────────────────│   
@@ -709,6 +748,7 @@ There are multiple health checkers globally, if 18% plus of health checkers repo
 │ www.animals4life.org  │  A   │  Failover │ s3-webXXX.amazonaws.com  │   Secondary
 └───────────────────────┴──────┴───────────┴──────────────────────────┘
 ```
+
 
 # S3
 
