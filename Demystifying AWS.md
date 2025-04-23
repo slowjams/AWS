@@ -100,9 +100,9 @@ You can connect and peer two VPCs (e.g  connect `10.0.0.0/16` with `10.1.0.0/16`
 
 * Every VPC has a **VPC Router**, see `10.16.0.1`- VPC Router below. The primary function of this VPC router is to take all of the route tables defined within that VPC, and then direct the traffic flow within that VPC, as well as to subnets outside of the VPC, based on the rules defined within those tables. VPC Router manages the traffic between subnets (in same VPC of course) and between a subnet with AWS Public Zone such as Internet Gateway, note that the traffic can be controlled by **Route Table** of subnets. Every subnet comes with a default Route Table (e.g the one in next section where the first two entries are the default ones).
 
-* An **Internet Gateway** (`IGW`)is region resilient (works for all AZs) and can be attached to a VPC
+* An **Internet Gateway**: (a virtual router)is region resilient (works for all AZs) and can be attached to a VPC. An Internet Gateway rewrite a packet to change it is source address (private ip address) to a public ip address as you will understand more below:
 
-* For ipv4, no public ip address is assigned to e.g EC2 instance, **public IP addresses are assigned to an Elastic Network Interface (ENI)**. An instance can have multiple ENIs. and  `IGW` assoicates the instance's private address with a public ip address via translation (this process is called **static NAT**), so OS won't be able to see the IPv4 address. However for IPv6, public ip addresses are directly assigned to instances (underlying OS can see ipv6 public address). 
+For ipv4, no public ip address is assigned to e.g EC2 instance, **public IP addresses are assigned to an Elastic Network Interface (ENI), not EC2 instance itself** (even though it makes you think ip address is assigned to EC2 instance directly as the choose box says "Auto-assign public IP" in EC2 Launching). An instance can have multiple ENIs. and  `IGW` assoicates the instance's private address with a public ip address via translation (this process is called **static NAT**), so OS won't be able to see the IPv4 address. However for IPv6, public ip addresses are directly assigned to instances (underlying OS can see ipv6 public address). 
 When you lauch a new EC2 instance, you get one public DNS name someting like `ec2-3-89-7-136.compute-1.amazonaws.com`, one **primary** private IPV4 address and one public IPV4 address (will change when you stop and start the EC2 instance), inside the VPC, the public DNS name always resolves to the private ip address and outside in public internet, the public DNS name resolve to the public ip address. Note that EC2 instance can be attached mutiple ENI (Elastic Network Interface) and each ENI has its private IP address, and you can have one elastic ip per pirvate IPV4 address
 
 Note that for most of online course that instructs to create an EC2 instance then change security group to enable SSH on port 22 then remote connect to the instance, this work because you create the EC2 instance in default VPC's subnets which are all public subnets by default and those public subnets are connected to default IGW.
@@ -174,6 +174,7 @@ sudo iptables -t nat -A POSTROUTING -o ens5 -s 0.0.0.0/0 -j MASQUERADE
 ```
 Since NAT instance is an EC2 instance so it can use security group while NAT gateway can only use NACLs
 * NAT Gateway doesn't work with IPv6
+* You need to assign elastic IP to an NAT Gateway in its setup, so NAT gateway DOES cost money, especailly you have to create a NAT Gateway per pubic subnet!
 
 
 ## Create Private Subnet with NAT Gateway
@@ -282,13 +283,15 @@ so Custom NACLs are **implicit deny** by default
 
 # EC2 Placement Group
 
+You can specify a Placement Groupt when launching an EC2 instance in the console UI.
+
 Background knowledge: Each rach has its own network and power source
 
 1. `Cluster`: instances are placed into **same rack** (same AZ of course) in datacentre, often same host, so lowest latency and 10Gbps speed communication between instances. However, it offer little resilient as if the physical fails all instances are down. When you create a cluster group, you don't specify an AZ, it is the first instance being placed into a AZ then the AZ is locked for further placements. Only certain supported instance type can be used with this cluter placement group
 
 2. `Spread`: maximize resilient by placing each instance into **distict rack** across mutiple AZs (each instance runs from a different rack. Inside a same AZ, each difference still run on different rack). For example, you want to lauch 6 instances, then 3 (a, b, c) instances are in AZA, 3 (d, e, f) instances are in AZB, for instance in same AZ, each instance are placed into distict rack physical hardware, so that if one fails e.g `a`'s rack's physical machine got power down, the rest of 2 instances (b, c) are still working. Spread placement has a limit of **maximum 7 instance per AZ**. Not supported for Dedicated Instances or Hosts
 
-3. `Partition`: similar to Spread, but it is **maximum 7 partition group per AZ**, inside a artition group, you can lauch as many as instance you want. Each partition group has its  own rack. You can choose the partition to lauch an instance or auto placed
+3. `Partition`: similar to Spread, but it is **maximum 7 partition group per AZ**, inside a partition group, you can lauch as many as instance you want. Each partition group has its  own rack. You can choose the partition to lauch an instance or auto placed
 
 
 # EC2 Categories
@@ -397,6 +400,36 @@ curl http://169.254.169.254/latest/meta-data/iam/security-credentials/YourInstan
 */
 ```
 
+note that to attach an Instance Role to EC2, user needs to have PassRole permission as:
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "IamPassRole",
+            "Effect": "Allow",
+            "Action": "iam:PassRole",   //<--------------------
+            "Resource": "*",            // <----------* mean any Instance Role, i.e the one you create for EC2
+            "Condition": {
+                "StringEquals": {
+                    "iam:PassedToService": "ec2.amazonaws.com"
+                }
+            }
+        },
+        {
+            "Sid": "ListEc2AndListInstanceProfiles",
+            "Effect": "Allow",
+            "Action": [
+                "iam:ListInstanceProfiles",
+                "ec2:Describe*",
+                "ec2:Search*",
+                "ec2:Get*"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
 
 ## EC2 Purchase Options
 
@@ -555,7 +588,7 @@ sudo mount -t efs -o tls fs-0f435408205fb6916.efs.us-east-1.amazonaws.com:/ ~/ef
 * Network Load Balacner (`NLB`): TCP, UDP, TLS
 
 
-When a ELB is deployed into AZs, nodes are created and attached to those AZs, what you see it is an single ELB instance but behind the scene it consists of multiple ELB nodes,  it is configured with an `A` record that resolves to the multiple ELB nodes. So the workflow is like: 
+When an ELB is deployed into AZs, nodes are created and attached to those AZs, what you see it is an single ELB instance but behind the scene it consists of multiple ELB nodes,  it is configured with an `A` record that resolves to the multiple ELB nodes. So the workflow is like: 
 
 
                                                                             ┌─────────────────┐         
@@ -564,7 +597,7 @@ When a ELB is deployed into AZs, nodes are created and attached to those AZs, wh
                                                                         ┌───│─│   │ ELBNodeA  │  AZA   │
                                                                         │   │ └───┘           │        │
                                                                         │   │                 │        │
-   1. get elb's hostname                                                │   └─────────────────┘        │
+   1. Get elb's hostname                                                │   └─────────────────┘        │
 user ──────────────────> ELB (created multiple nodes and `A` record)─┬──┤   ┌─────────────────┐        │
  │ ▲                                                                 │  │   │ ┌───┐           │◄───────┤
  │ │     2. ELB evenly return an ELB Node's IP to client             │  └───│─┤   │ ELBNodeB  │        │
@@ -617,6 +650,44 @@ You may have noticed that headers like `X-Forwarded-For` are HTTP headers, and s
 * If you specify targets using an instance ID, the source IP addresses of the clients are preserved (no need to enable "client IP preservation" as this functionality is already active by default in this scenario) and provided to your applications. If you specify targets by IP address, the source IP addresses are the private IP addresses of the load balancer nodes because the NLB doesn't inherently know which specific instance owns that IP, as multiple instances could potentially share the same IP address across different network interfaces on a single machine
 
 
+## Load Balance Healthy Check
+
+`HealthCheckIntervalSeconds`: This determines how frequently the load balancer sends health check requests to the targets. 
+Default: 30 seconds. 
+Range: 5 to 300 seconds
+
+`HealthCheckTimeoutSeconds`:This defines how long the load balancer waits for a response from the target before marking the health check as failed. 
+Default: 6 seconds for HTTP health checks, 10 seconds for TCP and HTTPS. 
+Range: 2 to 120 seconds. 
+
+`HealthyThresholdCount`: The number of consecutive successful health checks required before the target is considered healthy. 
+Default: 5. 
+Range: 2 to 10. 
+
+`UnhealthyThresholdCount`: The number of consecutive failed health checks required before the target is considered unhealthy. 
+Default: 2. 
+Range: 2 to 10. 
+
+
+
+## Auto Scaling Group
+
+When an ASG is connected to an load balancer, when the ASG initiate/terminate an instance, this instance will be registered/unregistered with the target group. 
+
+* Scaling Policies:
+  - **Dynamic Scaling** 
+     - Simple Scaling
+     - Step Scaling
+     - Target Tracking Scaling
+  - **Scheduled Scaling**
+  - **Predictive Scaling**
+* Health check grace period (default 300s)
+* Cooldown erpoiod (default 300 seconds): during the cooldown period, the ASG will not launch or terminate additional instances (to allow for metrics to stabilize)
+* Lifecycle Hooks
+
+
+
+
 ## Route53
 
 `DNS Zone`     : a database, for example  *.netflix.com (that's the zone) containing records
@@ -659,7 +730,6 @@ DNS records:
 └─────────┴─────────────────┴──────────────────┴────────┘              
 
 
-
                         Root NS : 13 servers gloabally                                                   
                         ┌─────┐                                                  
                         │     │                                                  
@@ -686,9 +756,10 @@ DNS records:
 └────────────┘            └─────────────────────────────────────────────────────┘
                            above records are stored as a zone file called "example.com" and SOA is the first record in the zone file
 
-**`CNAME` is invalid for naked/apex domains**.  An **apex** domain is a custom domain that does not contain a subdomain, such as `example.com`, `blogs.example.com` is not apex domain
+**`CNAME` is invalid for apex domains**.  An **apex** domain is a custom domain that does not contain a subdomain, such as `example.com`. `www.example.com` is not apex domain so that CNAME can support it.
 `ALIAS` can be used for both apex and non-apex domains and it is implemented by AWS and outside of the usual DNS standard.
-check https://www.ibm.com/think/topics/alias-vs-cname for more details such as how ALias records can delegte the second query to Authoritative NS
+check https://www.ibm.com/think/topics/alias-vs-cname for more details such as how ALias records can delegte the second query to Authoritative NS.
+AWS Route 53 does support alias records — but they are a special feature and not exactly the same as traditional DNS records like A or CNAME, An alias record is a Route 53–specific feature that lets you point your domain to certain AWS resources without using a CNAME. It **acts like an A or AAAA record* at the DNS level, but the target can be an AWS service endpoint. For example, you can assiocate you custom domain as a alias record (in A record) with a s3 bucket (e.g. `s3-website-us-east-1.amazonaws.comn `act as a static website)
 
 A Secondary Authoritative Server learns about the existence of a primary authoritative server through configuration settings within the DNS zone file, specifically the **Start of Authority** (SOA) record:
 
@@ -750,15 +821,30 @@ There are multiple health checkers globally, if 18% plus of health checkers repo
 ```
 
 
-# S3
-
-* Bucket name are **globally unique**
-* An object can vary from 0 bytes to 5TB
-* You can have only 100 (soft limit) buckets per account, and with support request, up to 1000 (hard limit) buckets per account. This is designed to not let you design a system such as "one user per bucket" as you are supposed to use prefix.
-
-
 
 ## CloudFormation
+
+In AWS, the colon (`:`) in an Amazon Resource Name (ARN) is used as a delimiter to separate different components of the ARN string
+
+```yaml
+# ARN format
+arn:partition:service:region:account-id:resource-id  
+arn:partition:service:region:account-id:resource-type/resource-id
+arn:partition:service:region:account-id:resource-type:resource-id
+
+# partition can be: `aws` (AWS Regions_ , aws-cn (China Regions), `aws-us-gov` (AWS GovCloud (US) Regions)
+
+IAM user
+arn:aws:iam::123456789012:user/johndoe
+
+SNS topic
+arn:aws:sns:us-east-1:123456789012:example-sns-topic-name
+
+VPC
+arn:aws:ec2:us-east-1:123456789012:vpc/vpc-0e9801d129EXAMPLE   # vpc is the resource-type
+```
+
+In AWS CloudFormation templates, the double colon (`::`) is used to separate the namespace and the resource name when referring to a resource type, for example, `AWS::EC2::Instance`
 
 ```yml
 AWSTemplateFormatVersion: version date
@@ -792,6 +878,11 @@ Outputs:
 ```
 
 * if `AWSTemplateFormationVersion` is used then `Description` needs to be dicretly follow it
+
+
+
+to understand The Order of Resource Creations on AWS CloudFormation using `ref` and `DependsOn`  see https://blog.shikisoft.com/cloudformation-order-of-resource-creation/
+
 
 
 ## IAM
@@ -973,18 +1064,334 @@ sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-c
 
 
 
+## ECS
+
+contains 2 lauch types:
+
+1. EC2 Lauch Type: you provision EC2 instances with ECS agent installed, containers are placed into EC2 Instances accordingly
+
+                 New Docker Container                               
+                     ┌───────┐                                      
+       ┌─────────────┤       ┼─────────────┐                        
+       │             └───┬───┘             │                        
+       │                 │                 │                        
+       │                 │                 │                        
+┌──────▼──────┐   ┌──────▼──────┐   ┌──────▼──────┐                 
+│ EC2 Instance│   │ EC2 Instance│   │ EC2 Instance│                 
+│             │   │             │   │             │                 
+│    ┌───┐    │   │             │   │    ┌───┐    │                 
+│    └───┘    │   │             │   │    └───┘    │                 
+│    ┌───┐    │   │    ┌───┐    │   │    ┌───┐    │                 
+│    └───┘    │   │    └───┘    │   │    └───┘    │                 
+│┌───────────┐│   │┌───────────┐│   │┌───────────┐│                 
+││ ECS Agent ││   ││ ECS Agent ││   ││ ECS Agent ││                 
+│└───────────┘│   │└───────────┘│   │└───────────┘│                 
+│             │   │             │   │             │                 
+└─────────────┘   └─────────────┘   └─────────────┘        
+
+
+    EC2 Instance Profile (used by ECS agent which make calls to AWS services such as ECS, ECR, CloudWatch Logs etc)                                        
+                     │                                          
+┌────────────────────┼───┐     ┌───┐                            
+│    EC2 Instance    │   │  ┌─►│   │ ECS                        
+│                    │   │  │  └───┘                            
+│                    │   │  │                                   
+│  ┌──────────────┐  │   │  │  ┌───┐                            
+│  │    Docker ┌──┼──┼───┼──┼─►│   │ ECR                        
+│  │┌──────────┼─┐│  │   │  │  └───┘                            
+│  ││ ECS Agent  ││◄─┘   │  │                                   
+│  │└────────────┘│      │  │  ┌───┐                            
+│  └──────────────┘      │  └─►│   │ CW Logs                    
+│                        │     └───┘                            
+│        ┌───┐TaskA Role │                                      
+│ Task A │   │           │       ┌───┐                          
+│        │   ├───────────┼──────►│   │ S3                       
+│        └───┘           │       └───┘                          
+│                        │                                      
+│        ┌───┐TaskB Role │                                      
+│ Task B │   │           │       ┌───┐                          
+│        │   ├───────────┼──────►│   │ DynamoDB                 
+│        └───┘           │       └───┘                          
+└────────────────────────┘                                      
+
+those EC2 instances (called "container instance" confusingly) are "registered" in a cluster, and when you create a ECS cluster, you also can create an ASG which can scale the number of EC2 instances
+
+                                                                    
+2. Fargate Lauch Type
+
+you don't provision the infrastructure (no EC2 instances to manage)
+                                                                    
+
+## Roles in ECS
+
+┌─────────────────┐                         
+│   EC2 instance  │                         
+│                 │                                               
+│  ┌──────────┐   │                         
+│  │ ECS Agent│◄──┼──────Task Execution Role: Pulling down docker images from ECR, Writing Logs to CloudWatch etc
+│  └──────────┘   │                         
+│                 │                         
+│  ┌───────────┐  │                         
+│  │ Container │  │                         
+│  │           │◄─┼──────Task Role: Create bucket and objects in S3 etc          
+│  │ Your Code │  │                         
+│  └───────────┘  │                                                
+└─────────────────┘                         
+
+**both the `EC2 instance profile` and the `ECS Task Execution Role` are used by the `ECS agent`**, so it looks like EC2 Instance Profile and Task Execution Role overlap https://stackoverflow.com/questions/79580380/are-ec2-instance-profile-and-task-execution-role-overlap-in-aws-ecs/79580922#79580922
+
+
+## ECS Port Mapping
+
+* For EC2 Launch Type, there are two mapping schemes:
+
+A. Manually map up to 10 contianers as you can define up to 10 containers in a Task definition
+
+  EC2 Instance             
+    Host Port  8080 --------------------8081-----------... more
+┌────────────────┬▲───────┐              |
+│                ││       │              |
+│                ││       │              |
+│                ▼│       │              |
+│ Container Port 80       │             80 of another container in this same EC2 instance
+│           ┌──────────┐  │
+│           │          │  │
+│           │ Container│  │
+│           │          │  │
+│           │          │  │
+│           │          │  │
+│           │          │  │
+│           └──────────┘  │
+│                         │
+│         ┌─────────────┐ │
+│         │  ECS Agent  │ │
+│         └─────────────┘ │
+└─────────────────────────┘
+
+
+B. Dynamic Host Port Mapping(you only define container port e.g 80 in task definition):
+
+                              ┌──────────────────────┐              
+                              │   EC2 Instance       │              
+                              │                      │              
+                              │      ┌─────┐         │              
+                        ┌────►36789:80     │ECS Task │        
+                        │     │      └─────┘         │              
+                        │     │      ┌─────┐         │              
+                        │────►39586:80     │ECS Task │              
+                        │     │      └─────┘         │              
+                        │     │                      │              
+      80/443   ┌───┐    │     └──────────────────────┘              
+Users─────────►│   │───►│                                           
+               └───┘    │     ┌──────────────────────┐              
+                ALB     │     │   EC2 Instance       │              
+                        │     │                      │              
+                        │     │      ┌─────┐         │              
+                        ├────►36789:80     │ECS Task │              
+                        │     │      └─────┘         │              
+                        │     │      ┌─────┐         │              
+                        └────►39586:80     │ECS Task │              
+                              │      └─────┘         │              
+                              │                      │              
+                              └──────────────────────┘
+You need to allow on the EC2 instance's Security Group **any port** from the ALB's Security Group, and there is no ENI for each task, only a single ENI for each EC2 instances
+
+C. use `awsvpc` https://ecsworkshop.com/ecs_networking/awsvpc/
+
+                     ┌───────────────────────────────┐   
+                     │         EC2 instance          │  
+                     │                               │  
+EC2 IP: 172.31.16.0  │  ┌─────┐                      │  no port needed for EC2 as you're not actually sending traffic to the EC2 instance's IP.
+◄────────────────────┼─►│ ENI ├──────► EC2 host      │  
+                     │  └─────┘        level process │  
+                     │                               │  
+  172.31.16.1:80    80  ┌─────┐       ┌─────────┐    │  
+◄────────────────────┼─►│ ENI ├──────80 Port    │    │  
+                     │  └─────┘       │         │    │  
+                     │                │container│    │  
+                     │                └─────────┘    │  
+  172.31:16.2:80    80   ─────┐       ┌─────────┐    │  
+◄────────────────────┼─►  ENI ├──────80 Port    │    │  
+                     │   ─────┘       │         │    │  
+                     │                │container│    │  
+                     │                └─────────┘    │   
+                     └───────────────────────────────┘  
+                                                       
+In awsvpc mode:
+
+* Each ECS task gets its own Elastic Network Interface (ENI) — basically like its own little "virtual network card" attached to your VPC.
+
+* Each ENI gets:
+
+  * Its own private IP address
+
+  * Its own security group
+
+* The task traffic bypasses the EC2 host's network stack — it doesn't need to route through the EC2 instance's ports so that You don’t need to open any ports on the EC2 instance’s security group for task communication.
+
+
+* For Fargate: (only define the container)       
+
+ ENI in ECS Service Prerequisites:                                                                                                                                  
+`awsvpc` Mode is enabled by default in Task Definition, awsvpc mode in ECS gives each task its own network interface (ENI), IP address, and its own security group. When you're using AWS Fargate, it always uses the awsvpc. For EC2 launch type, the default is awsvpc, other options are available such as `bridge`, `default`, `host`, `none`
+
+
+Some interesting things to note:
+1. ECS Cluster and Task Definition allow you to enable both fargate and EC2 lauch type, while in ECS serice, you can only choose one as it comes to "final deployment"
+
+2. Fargatecan choose Public ip address in ECS Service creation while EC2 lauch type cannot
+
+3. Security Group on ECS Service creation page means security group for tasks's ENI as `awsvpc` Mode allow each task has its own ENI
+
+4. Fargate's Target Group on EC2
+
+Although Farget i serverless, you can still need a target registered under EC2's Target group
+
+```bash
+EC2 -> Target groups -> tg-nginxdemos-hello
+
+# Registered targets (1)
+
+# IP address       Port               Zone                   
+# 172.31.3.1        80      ap-southeast-2a (apse2-az1)
+```
+note that it doesn't have to be an EC2 instance to be registered in EC2's Target groups, a task (container) can also registered in Target groups (so why AWS put Target Group under EC2 in Console UI?). `172.31.3.1` is the private address of the task itself, if you turn on "Turned on Public IP" (only available in Farg) in Fargate service creation page, then you can see the task's public ip address:
+```bash
+# Container details for nginxdemos-hello -> Network bindings
+
+# Host port   Container port     Protocol         External link
+# 80          80                 tcp              13.211.27.52:80
+```
+
+## ECS Concepts
+
+A **Cluster** is logical grouping of tasks or services. When creating a cluster, you can choose Infrastructure to be "AWS Fargate" (automatically selected for you and you cannot de-select it), "Amazon EC2 instances" (you can choose the desired number of EC2 instances in this cluter, the containers will be placed into the EC2 instances in "EC2 Lauch Type" above), and "External Instances using ECS Anywhere".
+
+A **Task** is a running docker container (I guess aws "task" instead of "container" to differential EC2 contianer)
+
+A **Task definition** is like a "docker compose file" where you specify multiple docker containers. You can specify *Lauch Type* to be *Fargate*, *EC2 Instances*,
+or *External* (run containers on on-premises servers, you can only sepcify it in Service)
+Note that *Fargate* is serveless so you don't need to manager the underlying EC2 containers (you won't see new EC2 instance in your AWS), while *External* mode,  EC2 Instances you have manage the EC2 instances and install "agent" to register your EC2 instance with the underlying cluster, for *EC2 Instances* mode, AWS will install agents and regiser with cluster for you.
+
+A **Service** choose a Task definition and defines long running tasks-can control task count with Auto Scaling and attach an ELB. You can multi-select  *Fargate*, *EC2 Instances* or *External*.
+
+Note that *IAM instance role* (for underlying EC2 instasnces in non-fargate mode) is different to the* IAM Task Role*, and container instance have access to all of the permissions that are supplied to the container instance role through instance metadata. For Farget mode, there is only IAM Task Role, of course, because it doesn't have underlyhing EC2 instance.
+
+**Auto-Scaling**: there are 2 auto scaling groups involved. When you create a ECS clutser that supports EC2 launch type, an auto scaling group is created to scaling the underlying EC2 instances and you can view in the EC2's ASG page. The second ASG is when you create an ECS service you can specify the number of tasks and scaling policies for tasks (what's more strange it is, you specify the desired number of task in Task definition section and specify the min and max in Service auto scaling section, should it better to specify all in latter?), you cannot view it EC2's ASG page
+
+**Task Placement Strategy**: define how tasks are distributed onto EC2 instances in the cluster
+
+
+The step to Create an ECS Cluster in details: 
+
+choose EC2 Lauch Type to be *External* (best learning example where you immediately know how AWS manages *EC2 Instances* mode for you):
+
+0. Create a Role (trusted entity to be EC2) that contains `AmazonEC2ContainerServiceforEC2Role` policy (contains many ecs related Allow statement e.g ecs:CreateCluster)
+0. Launch an EC2 instance (AMI needs to be an ECS-optimized AMI which pre-installed with ECS agent), also attach the role created above in the setting and enter User Data below:
+
+```bash
+#!/bin/bash
+echo ECS_CLUSTER=myecs-cluster >> /etc/ecs/ecs.config  # <---------------------this will "register" the EC2 instance with your ECS cluster
+```
+
+1. Create a Cluster, note that we choose Infrastructure to be *External* as explained above.
+
+2. Create a **Task Definition** to specify what docker image/s you want to use to run a container on EC2. Note that an app might need multiple different docker instances (e.g webapp itself and database instance), that why you can define multiple container in Task Definition by clicking "Add container".
+
+3. Click **Run Task** to chose the Lauch Type (EC2 in this case) and specify the VPC, subnet etc and the task definition in step 1. Then the nginx docker instance will be running inside the registered EC2 instance. Note that a Task can consit of multiple running docker instances.
+
+Differebce between Task and Service is:
+
+A Task is created when you run a Task directly, which launches container(s) (defined in the task definition) until they are stopped or exit on their own, at which point they are not replaced automatically. Running Tasks directly is ideal for short-running jobs, perhaps as an example of things that were accomplished via CRON.
+
+A Service is used to guarantee that you always have some number of Tasks running at all times using ASG. If a Task's container exits due to an error, or the underlying EC2 instance fails and is replaced, the ECS Service will replace the failed Task. 
+
+
+**ECS Task Placement Strategies** in Service setup (only apply to EC2 Instance, not Fargate):
+
+* `Binpack`: minimizes the number of EC2 instance in use by placing tasks on least usage of CPU, memeory etc
+```json
+"placementStrategy" : [
+  {
+     "field": "memory",
+     "type": "binpack"
+  }
+]
+```
+* `Random`: pretty straightforward
+* `Spread`:
+```json
+"placementStrategy" : [
+  {
+     "field": "attributes:ecs.availability-zone",
+     "type": "spread"
+  }
+]
+```
+* `AZ balanced spread`
+* `AZ balanced binpack`
+* ...
+
+**ECS Task Placement Constraints** in Task Definition setup
+
+* `distinctInstance`: place each task on different EC2 instance
+* `memberof`:
+
+```json
+"placementConstraints" : [
+  {
+     "field": "attributes:ecs.instance-type =~ t2.*",
+     "type": "memberof"
+  }
+]
+```
 
 
 
+# S3
+
+Amazon S3 is designed to be region-wide and highly durable, and here's how it works: When you create an S3 bucket, you choose an AWS Region (e.g., us-east-1, eu-west-1).
+AWS automatically stores your data across multiple Availability Zones within that region. You cannot choose or restrict which specific AZs your data is stored in.
+his is part of S3’s 11 9s durability (99.999999999%) — it's achieved by replicating your data across at least 3 AZs.
+
+* S3 is a regional service with a **global namespace Global bucket names**: S3 bucket names are globally unique across all regions and accounts but **storage is regional**: When you create a bucket, you choose a region, and the data is physically stored in that region (unless you replicate it elsewhere).
+* Bucket name are **globally unique**
+* An object can vary from 0 bytes to 5TB
+* You can have only 100 (soft limit) buckets per account, and with support request, up to 1000 (hard limit) buckets per account. This is designed to not let you design a system such as "one user per bucket" as you are supposed to use prefix.
+* A bucket policy can be applied to allow cross-account access
+* once you enable versioning, it can never go back to diabled, however, you can suspend it
+* Client-Side Encryption (CSE) and Server-Side Encryption (SSE) and SSE is mandatory by AWS
 
 
+Server-Side Encryption (SSE) contains below types:
+* Amazon S3 managed keys (`SSE-S3`)
+* AWS Key Management Service key (`SSE-KMS`)
 
+## KMS (Key Management Service)
 
+KMS can be used for up to 4KB of data. One way to get away with this limition is to use Data Encryption Keys (`DEKs`) which is a type of key that KMS can generate by `GenerateDataKey` api, the process is below:
 
+1. KMS generates two version of DEK: plaintext version of DEK and cyphertext version of DEK, both are generated by the MKS key that generated it
 
+S3 uses KMS to generate a DEK for every single object, the plaintext DEK encrypt the data then being discarded, and S3 stores the encrypted DEK alongside the encrypted object metadata. So **the encrypted object + encrypted DEK are stored in S3**.
 
+When the object is accessed:
 
+1. S3 retrieves the encrypted DEK from metadata.
 
+2. S3 sends it to KMS to be decrypted (requires KMS permissions).
+
+3. KMS decrypts the DEK and returns the plaintext DEK.
+
+4. S3 uses the plaintext DEK to decrypt the object data and serve it to the requester.
+
+You might ask what happy if kms rotate the kms key, isn't that the previous stored encrypted DEK alongside the encrypted object metadata won't be able to be decrypted by original kms key? The answer is when AWS KMS rotates a key, it does not delete the old versions of the key. Instead:
+
+* It creates a new key version, and
+
+* Retains all previous key versions (internally associated with the same logical KMS key ID).
+
+KMS figures out which version of the key was used to encrypt the DEK and uses that version to decrypt it. KMS handles all of this transparently.
 
 
 
@@ -1142,7 +1549,7 @@ Routes for rtb-0dd7233d23fcd8e6f
 
 2. Create four subnets under `MyVPC` and enable **auto-assign public IPV4** address (receive public IP addresses from the Amazon pool) for the two public subnets
 
-3. Create the private route table, now you have:
+3. Create the private route table manually, now you have:
 
 ```bash
 | Route table ID        | VPC                   | Main | Name       |
@@ -1217,7 +1624,7 @@ Routes for rtb-0dd7233d23fcd8e6f  # Main
 | 0.0.0.0/0   | igw-0ea30a8ccd7c91ed8 (MyIGW) |
 ```
 
-7. Create a NAT Gateway (`MyNATGW`) under `Public-1A` subnet (you can only place NAT Gateway in public subnet), you will need to assign Elastic IP address for the NAT Gateway
+7. Create a NAT Gateway (`MyNATGW`) under `Public-1A` subnet (**you have to place NAT Gateway in public subnet**), you will need to assign Elastic IP address for the NAT Gateway
 
 8. Add a route with `MyNATGW` in the private route table `Private-RT`
 
@@ -1234,8 +1641,9 @@ this step is important because our private subnets will have access to the inter
 The definition of a Public Subnet in an Amazon VPC is:
    *The Route Table attached to the Subnet has a Route with a destination of 0.0.0.0/0 that points to an Internet Gateway*
 
-If a VPC does not have an Internet Gateway, then the resources in the VPC cannot be accessed from the Internet. NAT Gateway does something similar to Internet Gateway, but it only works one way: Instances in a private subnet can connect to services outside your VPC but external services cannot initiate a connection with
+If a VPC does not have an Internet Gateway, then the resources in the VPC cannot be accessed from the Internet. NAT Gateway does something similar to Internet Gateway, but it only works one way: Instances in a private subnet can connect to services outside your VPC but external services cannot initiate a connection with, scenerio is e.g., backend server to download patches or access external APIs without being directly reachable from the internet.
 
+Note that NAT Gateway still need an Internet Gateway to be able to access the internet outbound. Remember you need to put NAT Gateway in a public subnet in NAT Gateway creation, it must associate NAT Gateway with the public subnet so that: NAT Gateway --> Public Subnet (where NAT Gateway resides) --> Route to Internet Gateway --> Internet
 
 ```yml
 aws ec2 run-instances --image-id <value> --instance-type <value> --security-group-ids <value> --subnet-id <value> --key-name cloud-labs-nv --user-data
@@ -1319,93 +1727,7 @@ After enabling versioning,  existing object before versioning will have null Ver
 =======================================================================================================
 
 
-## ECS
 
-A **Cluster** is logical grouping of tasks or services. When creating a cluster, you can choose Infrastructure to be "AWS Fargate" (automatically selected for you and you cannot de-select it), "Amazon EC2 instances", and "External Instances using ECS Anywhere".
-
-A **Task** is a running docker container (I guess aws "task" instead of "container" to differential EC2 contianer)
-
-A **Task definition** is like a "docker compose file" where you specify multiple docker containers. You can specify *Lauch Type* to be *Fargate*, *EC2 Instances*,
-or *External* (run containers on on-premises servers, you can only sepcify it in Service)
-Note that *Fargate* is serveless so you don't need to manager the underlying EC2 containers (you won't see new EC2 instance in your AWS), while *External* mode,  EC2 Instances you have manage the EC2 instances and install "agent" to register your EC2 instance with the underlying cluster, for *EC2 Instances* mode, AWS will install agents and regiser with cluster for you.
-
-A **Service** choose a Task definition and defines long running tasks-can control task count with Auto Scaling and attach an ELB. You can multi-select  *Fargate*, *EC2 Instances* or *External*.
-
-Note that *IAM instance role* (for underlying EC2 instasnces in non-fargate mode) is different to the* IAM Task Role*, and container instance have access to all of the permissions that are supplied to the container instance role through instance metadata. For Farget mode, there is only IAM Task Role, of course, because it doesn't have underlyhing EC2 instance.
-
-**Task Placement Strategy**: define how tasks are distributed onto EC2 instances in the cluster
-
-
-The step to Create an ECS Cluster in details: 
-
-choose EC2 Lauch Type to be *External* (best learning example where you immediately know how AWS manages *EC2 Instances* mode for you):
-
-0. Create a Role (trusted entity to be EC2) that contains `AmazonEC2ContainerServiceforEC2Role` policy (contains many ecs related Allow statement e.g ecs:CreateCluster)
-0. Launch an EC2 instance (AMI needs to be an ECS-optimized AMI which pre-installed with ECS agent), also attach the role created above in the setting and enter User Data below:
-
-```bash
-#!/bin/bash
-echo ECS_CLUSTER=myecs-cluster >> /etc/ecs/ecs.config  # <---------------------this will "register" the EC2 instance with your ECS cluster
-```
-
-1. Create a Cluster, note that we choose Infrastructure to be *External* as explained above.
-
-2. Create a **Task Definition** to specify what docker image/s you want to use to run a container on EC2. Note that an app might need multiple different docker instances (e.g webapp itself and database instance), that why you can define multiple container in Task Definition by clicking "Add container".
-
-3. Click **Run Task** to chose the Lauch Type (EC2 in this case) and specify the VPC, subnet etc and the task definition in step 1. Then the nginx docker instance will be running inside the registered EC2 instance. Note that a Task can consit of multiple running docker instances.
-
-Differebce between Task and Service is:
-
-A Task is created when you run a Task directly, which launches container(s) (defined in the task definition) until they are stopped or exit on their own, at which point they are not replaced automatically. Running Tasks directly is ideal for short-running jobs, perhaps as an example of things that were accomplished via CRON.
-
-A Service is used to guarantee that you always have some number of Tasks running at all times using ASG. If a Task's container exits due to an error, or the underlying EC2 instance fails and is replaced, the ECS Service will replace the failed Task. 
-
-
-**Dynamic Host Port Mapping**:
-
-For EC2 Lauch Type, an EC2 instance is assigned multiple random port numbers (host ports) that mapped to container ports, so you must allow on the EC2 instance's Security Group any port from the ALB's Security Group.
-
-For Fargate: each task gets a unique private ip adddress, there is no host port since we don't manage underlying EC2 instance. Each task is assigned with an ENI whose expose port is the same as the task's expose port, so you only need to allow port 80 (443 is not needed since the traffic is already in VPC) from ALB (security group allow port 80/443).
-
-
-**ECS Task Placement Strategies** in Service setup (only apply to EC2 Instance, not Fargate):
-
-* `Binpack`: minimizes the number of EC2 instance in use by placing tasks on least usage of CPU, memeory etc
-```json
-"placementStrategy" : [
-  {
-     "field": "memory",
-     "type": "binpack"
-  }
-]
-```
-* `Random`: pretty straightforward
-* `Spread`:
-```json
-"placementStrategy" : [
-  {
-     "field": "attributes:ecs.availability-zone",
-     "type": "spread"
-  }
-]
-```
-* `AZ balanced spread`
-* `AZ balanced binpack`
-* ...
-
-**ECS Task Placement Constraints** in Task Definition setup
-
-* `distinctInstance`: place each task on different EC2 instance
-* `memberof`:
-
-```json
-"placementConstraints" : [
-  {
-     "field": "attributes:ecs.instance-type =~ t2.*",
-     "type": "memberof"
-  }
-]
-```
 
 ## CloudFormation
 
@@ -1413,7 +1735,7 @@ For Fargate: each task gets a unique private ip adddress, there is no host port 
 
 Image current user Paul doesn't have permission to create an EC2 instance but the senior developer still assign a CloudFormation template for him to execute. That's how "Service Role" comes into play when Paul is createing a stack he can specify a service role for CloudFormation to perform tasks. Below is the steps:
 
-1. Creates a **service role** e.g **CloudFormationServiceRole** that specify CloudFormation has permission to create EC2 instance. Its trust entity is like:
+1. Creates a **service role** e.g "CloudFormationServiceRoleEC2" that specify CloudFormation has permission to create EC2 instance. Its trust entity is like:
 
 ```json
 {
@@ -1458,14 +1780,15 @@ below is a permission that is attached to the user role above
     "Statement": [{
         "Effect": "Allow",
         "Action": [
-            "iam:PassRole"  // <----------------PassRole is needed, what it means is "Paul can attach 'CloudFormationServiceRole' as service role to CF
+            "iam:PassRole"  // <----------------PassRole is needed, what it means is "Paul can attach 'CloudFormationServiceRoleEC2' as service role to CF
                             // also note that Paul doesn't have permission to create EC2 instances, however when he uses CF (assumes that Paul has permission to use CF), CF can create EC2 instance
         ],
-        "Resource": "arn:aws:iam::<account-id>:role/CloudFormationServiceRole"
+        "Resource": "arn:aws:iam::<account-id>:role/CloudFormationServiceRoleEC2"
     }]
 }
  ```
 
+Now Paul (need to assume the user rule first) can input "CloudFormationServiceRoleEC2" into "IAM role name" in CF's Configure stack options section
 
 
  ## SQS
